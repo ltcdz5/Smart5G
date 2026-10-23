@@ -1,0 +1,377 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<meta name="theme-color" content="#f1faff" media="(prefers-color-scheme: light)">
+<meta name="theme-color" content="#141c27" media="(prefers-color-scheme: dark)">
+<title>Smart 5G Switch</title>
+<link rel="stylesheet" type="text/css" href="/internal/insets.css">
+<style>
+:root{
+  --p:#36618f;--op:#ffffff;--pc:#c0e5ff;--opc:#001e44;
+  --s:#4f5f78;--os:#ffffff;--sc:#d2e4ff;--osc:#071d31;
+  --surf:#f1faff;--osurf:#141c27;--osv:#364356;
+  --sclow:#ebf4ff;--sc0:#e5eeff;--sch:#dde6f6;--schh:#d4ddee;
+  --out:#667388;--outv:#bac7de;--err:#ba1a1a;
+  --ok:#2e6b4f;--okc:#c8f0d8;--warn:#8a5a10;
+}
+html[data-theme="dark"]{
+  --p:#a8c8ff;--op:#001d39;--pc:#24476f;--opc:#d6e6ff;
+  --s:#bac9e0;--os:#1a2330;--sc:#2c4767;--osc:#d6e6ff;
+  --surf:#141c27;--osurf:#e3e8f2;--osv:#a9b6ca;
+  --sclow:#1b2431;--sc0:#1f2937;--sch:#27323f;--schh:#374556;
+  --out:#8c9ab0;--outv:#3a4657;--err:#ffb4ab;
+  --ok:#8fd8b0;--okc:#1e3d2e;--warn:#ffcf7a;
+}
+*{box-sizing:border-box;-webkit-tap-highlight-color:transparent;margin:0;padding:0}
+html{background:var(--surf);min-height:100vh}
+body{background:var(--surf);overscroll-behavior-y:contain;
+  min-height:100vh;min-height:100dvh}
+/* 沉浸式由 KSU 的 /internal/insets.css 提供 --window-inset-* 变量 */
+body{
+  color:var(--osurf);
+  position:relative;z-index:1;
+  font-family:'Google Sans','Roboto','Noto Sans SC',system-ui,sans-serif;
+  font-size:14px;line-height:1.45;
+  padding:calc(var(--window-inset-top, env(safe-area-inset-top,0px)) + 20px) 16px calc(var(--window-inset-bottom, env(safe-area-inset-bottom,0px)) + 108px);
+  min-height:100vh;-webkit-font-smoothing:antialiased;
+  transition:background .35s,color .35s;
+}
+/* header */
+.hd{padding:0 4px 18px;display:flex;align-items:center;gap:13px}
+.hd .mark{width:42px;height:42px;border-radius:13px;background:var(--pc);color:var(--opc);
+  display:grid;place-items:center;flex-shrink:0;transition:.35s}
+.hd .mark svg{width:21px;height:21px;fill:currentColor}
+.hd .hdt{flex:1}
+.hd h1{font-size:20px;font-weight:600;letter-spacing:-.2px;line-height:1.2}
+.hd p{font-size:11.5px;color:var(--osv);margin-top:2px}
+.theme-btn{width:40px;height:40px;border-radius:50%;border:0;background:var(--sclow);
+  display:grid;place-items:center;cursor:pointer;transition:.3s;flex-shrink:0}
+.theme-btn:active{background:var(--sch)}
+.theme-btn svg{width:20px;height:20px;fill:var(--p);transition:.3s}
+
+/* status */
+.status{background:var(--sclow);border-radius:24px;padding:18px 20px;transition:.35s}
+.status .k{font-size:11px;font-weight:600;letter-spacing:1px;text-transform:uppercase;color:var(--osv)}
+.status .v{font-size:32px;font-weight:600;color:var(--p);letter-spacing:-.6px;margin-top:2px;transition:.3s}
+.status .d{font-size:12px;color:var(--osv);margin-top:1px}
+.st-grid{display:grid;grid-template-columns:1fr 1fr 1fr;gap:9px;margin-top:14px}
+.st-grid .it{background:var(--sc0);border-radius:14px;padding:10px 12px;transition:.35s}
+.st-grid .it .k2{font-size:10.5px;color:var(--osv);letter-spacing:.4px}
+.st-grid .it .v2{font-size:17px;font-weight:600;margin-top:1px}
+
+/* section */
+.sec{margin-top:20px}
+.sec .sh{display:flex;align-items:center;gap:8px;padding:0 4px;margin-bottom:9px}
+.sec .sh svg{width:15px;height:15px;fill:var(--p)}
+.sec .sh span{font-size:11.5px;font-weight:700;letter-spacing:1.1px;text-transform:uppercase;color:var(--p)}
+.badge{font-size:10.5px;font-weight:600;background:var(--sc);color:var(--osc);
+  padding:3px 9px;border-radius:20px;margin-left:auto}
+
+/* card */
+.card{background:var(--sc0);border-radius:20px;overflow:hidden;transition:.35s}
+.row{padding:15px 17px;display:flex;align-items:center;gap:12px}
+.row+.row{border-top:1px solid var(--outv)}
+.row .t{font-size:14px;font-weight:500;flex:1}
+.row .s{font-size:11.5px;color:var(--osv);margin-top:2px;line-height:1.4}
+.row .txt{flex:1;min-width:0}
+
+/* switch */
+.sw{width:50px;height:30px;border-radius:15px;background:var(--schh);position:relative;
+  flex-shrink:0;cursor:pointer;transition:.26s}
+.sw::after{content:'';position:absolute;top:5px;left:5px;width:20px;height:20px;border-radius:50%;
+  background:var(--outv);transition:.26s}
+.sw.on{background:var(--p)}
+.sw.on::after{left:25px;width:24px;height:24px;top:3px;background:var(--op)}
+
+/* segmented */
+.seg{display:flex;background:var(--sclow);border-radius:12px;padding:3px;gap:2px}
+.seg button{flex:1;border:0;background:transparent;color:var(--osv);font-family:inherit;
+  font-size:12.5px;font-weight:500;padding:9px 2px;border-radius:9px;cursor:pointer;
+  transition:.2s;white-space:nowrap}
+.seg button.on{background:var(--sc);color:var(--osc);font-weight:600}
+.seg button:active{opacity:.75}
+
+/* input */
+input[type=number]{width:86px;background:var(--sclow);border:1px solid var(--outv);
+  border-radius:10px;padding:8px 10px;font-family:inherit;font-size:14px;
+  color:var(--osurf);text-align:right;transition:.2s}
+input[type=number]:focus{outline:0;border-color:var(--p);background:var(--surf)}
+
+/* fab */
+.fab{position:fixed;left:16px;right:16px;
+  bottom:calc(var(--window-inset-bottom, env(safe-area-inset-bottom,0px)) + 16px);height:54px;border:0;
+  border-radius:18px;background:var(--p);color:var(--op);
+  font-family:inherit;font-size:15px;font-weight:600;cursor:pointer;
+  display:flex;align-items:center;justify-content:center;gap:9px;
+  box-shadow:0 2px 8px rgba(0,0,0,.14);transition:.2s}
+.fab svg{width:18px;height:18px;fill:currentColor}
+.fab:active{transform:scale(.975)}
+.fab:disabled{background:var(--sch);color:var(--osv);box-shadow:none;cursor:default;opacity:.85}
+
+/* hint + log */
+.hint{font-size:11px;color:var(--osv);opacity:.75;padding:9px 6px 0;line-height:1.6}
+.hint b{color:var(--err);font-weight:500;opacity:.9}
+.log{font-family:ui-monospace,Menlo,monospace;font-size:11px;color:var(--osv);
+  white-space:pre-wrap;max-height:170px;overflow:auto;line-height:1.7;
+  background:var(--sclow);border-radius:14px;padding:12px 14px;min-height:60px}
+.loading{opacity:.5}
+</style>
+</head>
+<body>
+
+<div class="hd">
+  <div class="mark">
+    <svg viewBox="0 0 24 24"><path d="M12 21l3-3h-2v-6h-2v6H9l3 3zm-6.5-9.5l2-2V5h5V3H6.5v8.5zM18 12h-2v3h-2v2h4v-5zM12 3v2h2V3h-2z"/></svg>
+  </div>
+  <div class="hdt">
+    <h1>Smart 5G</h1>
+    <p>高温 · 低电 · 弱信号 自动回落 4G</p>
+  </div>
+  <button class="theme-btn" id="themeBtn" onclick="toggleTheme()" title="切换主题">
+    <svg id="themeIcon" viewBox="0 0 24 24"><path d="M12 18a6 6 0 1 1 0-12 6 6 0 0 1 0 12zm0-2a4 4 0 1 0 0-8 4 4 0 0 0 0 8zM11 1h2v3h-2zm0 19h2v3h-2zM3.5 4.9l1.4-1.4 2.1 2.1-1.4 1.4zm12.1 12.1l1.4-1.4 2.1 2.1-1.4 1.4zM1 11h3v2H1zm19 0h3v2h-3zM4.9 19.1l-1.4-1.4 2.1-2.1 1.4 1.4zM17 6.9l-1.4-1.4 2.1-2.1 1.4 1.4z"/></svg>
+  </button>
+</div>
+
+<div class="status" id="statusCard">
+  <div class="k">当前网络</div>
+  <div class="v" id="net">-</div>
+  <div class="d" id="netdesc">读取中...</div>
+  <div class="st-grid">
+    <div class="it"><div class="k2">温度</div><div class="v2" id="temp">-</div></div>
+    <div class="it"><div class="k2">电量</div><div class="v2" id="cap">-</div></div>
+    <div class="it"><div class="k2">模式</div><div class="v2" id="mode">-</div></div>
+  </div>
+</div>
+
+<div class="sec">
+  <div class="sh">
+    <svg viewBox="0 0 24 24"><path d="M12 2l2.4 7.4H22l-6 4.5 2.3 7.1-6.3-4.6-6.3 4.6L8 13.9 2 9.4h7.6z"/></svg>
+    <span>切换模式</span>
+  </div>
+  <div class="card" style="padding:14px 16px">
+    <div class="seg" id="segmode">
+      <button data-v="auto" class="on">自动</button>
+      <button data-v="4g">强制 4G</button>
+      <button data-v="5g">强制 5G</button>
+    </div>
+  </div>
+</div>
+
+<div class="sec">
+  <div class="sh">
+    <svg viewBox="0 0 24 24"><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.8-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1A1.7 1.7 0 0 0 9 19.4a1.7 1.7 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.8 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1A1.7 1.7 0 0 0 4.6 9a1.7 1.7 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.8.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.8V9a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z"/></svg>
+    <span>参数</span>
+    <span class="badge">改完点底部保存</span>
+  </div>
+  <div class="card">
+    <div class="row">
+      <div class="txt"><div class="t">高温阈值</div><div class="s">达到该温度切 4G</div></div>
+      <input type="number" id="temp_high" min="30" max="60">
+    </div>
+    <div class="row">
+      <div class="txt"><div class="t">降温阈值</div><div class="s">降到此值以下才回 5G</div></div>
+      <input type="number" id="temp_low" min="25" max="55">
+    </div>
+    <div class="row">
+      <div class="txt"><div class="t">弱信号阈值</div><div class="s">RSRP 低于此值切 4G (dBm)</div></div>
+      <input type="number" id="sig_thres" min="-140" max="-60">
+    </div>
+    <div class="row">
+      <div class="txt"><div class="t">信号好阈值</div><div class="s">RSRP 高于此值回 5G (dBm)</div></div>
+      <input type="number" id="sig_good" min="-140" max="-60">
+    </div>
+    <div class="row">
+      <div class="txt"><div class="t">低电量阈值</div><div class="s">低于此电量切 4G (%)</div></div>
+      <input type="number" id="lowbat" min="5" max="50">
+    </div>
+    <div class="row">
+      <div class="txt"><div class="t">检测间隔</div><div class="s">多久检测一次 (秒)</div></div>
+      <input type="number" id="interval" min="30" max="600" step="30">
+    </div>
+    <div class="row">
+      <div class="txt"><div class="t">切换冷却</div><div class="s">两次切换最小间隔 (秒)</div></div>
+      <input type="number" id="cooldown" min="60" max="1800" step="60">
+    </div>
+    <div class="row">
+      <div class="txt"><div class="t">低电量切换</div><div class="s">电量低时自动切 4G</div></div>
+      <div class="sw" id="sw_lowbat"></div>
+    </div>
+  </div>
+  <div class="hint">提示：<b>信号好阈值</b>与<b>弱信号阈值</b>差距越大，越不容易反复切换，建议至少相差 8 dB。</div>
+</div>
+
+<div class="sec">
+  <div class="sh">
+    <svg viewBox="0 0 24 24"><path d="M4 5h16v2H4zm0 6h16v2H4zm0 6h10v2H4z"/></svg>
+    <span>最近日志</span>
+  </div>
+  <div class="log loading" id="log">加载中...</div>
+</div>
+
+<button class="fab" id="save" onclick="saveCfg()">
+  <svg viewBox="0 0 24 24"><path d="M17 3H5a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2V7zm-5 16a3 3 0 1 1 0-6 3 3 0 0 1 0 6zm3-10H5V5h10z"/></svg>
+  <span id="saveTxt">保存并重启守护</span>
+</button>
+
+<script>
+var state = { netmode: "auto", lowbat_enable: "1" };
+
+/* ---- KSU exec（每次实时检测，不缓存，兼容异步注入）---- */
+function getKsu(){
+  if (typeof window.ksu !== "undefined" && window.ksu && window.ksu.exec) return window.ksu;
+  if (typeof ksu !== "undefined" && ksu && ksu.exec) return ksu;
+  if (typeof window.ksu !== "undefined" && window.ksu && window.ksu.exec) return window.ksu;
+  if (typeof KernelSU !== "undefined" && KernelSU && KernelSU.exec) return KernelSU;
+  return null;
+}
+function SH(cmd){
+  return new Promise(function(ok){
+    var k = getKsu();
+    if(!k){ ok({errno:-1, stdout:"", stderr:"no ksu api"}); return; }
+    var cb = "__cb" + Date.now() + Math.floor(Math.random()*1e5);
+    window[cb] = function(errno, stdout, stderr){
+      try{ delete window[cb]; }catch(e){}
+      ok({errno: errno, stdout: (stdout||""), stderr: (stderr||"")});
+    };
+    try { k.exec(cmd, "window." + cb); }
+    catch(e){
+      try{ delete window[cb]; }catch(x){}
+      ok({errno:-1, stdout:"", stderr:String(e)});
+    }
+  });
+}
+
+function TOAST(m){
+  var _k = getKsu(); if(_k && _k.toast){ try{ _k.toast(m); return; }catch(e){} }
+  var t = document.getElementById("_tt");
+  if(!t){
+    t = document.createElement("div"); t.id = "_tt";
+    t.style.cssText = "position:fixed;left:50%;bottom:96px;transform:translateX(-50%);" +
+      "background:var(--sch);color:var(--osurf);padding:11px 18px;border-radius:12px;" +
+      "font-size:13px;z-index:99;transition:.3s;opacity:0;pointer-events:none;max-width:86vw;text-align:center";
+    document.body.appendChild(t);
+  }
+  t.textContent = m; t.style.opacity = "1";
+  clearTimeout(window._tt);
+  window._tt = setTimeout(function(){ t.style.opacity = "0"; }, 1900);
+}
+
+/* ---- 主题 ---- */
+function applyTheme(t){
+  document.documentElement.setAttribute("data-theme", t);
+  var mt = document.querySelector('meta[name="theme-color"]');
+  if (mt) mt.setAttribute("content", t === "dark" ? "#141c27" : "#f1faff");
+  var ic = document.getElementById("themeIcon");
+  if(ic){
+    ic.innerHTML = (t === "dark")
+      ? '<path d="M12 3a9 9 0 1 0 9 9 7 7 0 0 1-9-9z"/>'
+      : '<path d="M12 18a6 6 0 1 1 0-12 6 6 0 0 1 0 12zm0-2a4 4 0 1 0 0-8 4 4 0 0 0 0 8zM11 1h2v3h-2zm0 19h2v3h-2zM3.5 4.9l1.4-1.4 2.1 2.1-1.4 1.4zm12.1 12.1l1.4-1.4 2.1 2.1-1.4 1.4zM1 11h3v2H1zm19 0h3v2h-3zM4.9 19.1l-1.4-1.4 2.1-2.1 1.4 1.4zM17 6.9l-1.4-1.4 2.1-2.1 1.4 1.4z"/>';
+  }
+  try{ localStorage.setItem("s5g_theme", t); }catch(e){}
+}
+function toggleTheme(){
+  var cur = document.documentElement.getAttribute("data-theme") || "light";
+  applyTheme(cur === "dark" ? "light" : "dark");
+}
+(function initTheme(){
+  var saved = null;
+  try{ saved = localStorage.getItem("s5g_theme"); }catch(e){}
+  if(!saved){
+    saved = (window.matchMedia && window.matchMedia("(prefers-color-scheme: dark)").matches) ? "dark" : "light";
+  }
+  applyTheme(saved);
+})();
+
+/* ---- 渲染 ---- */
+function paint(){
+  var btns = document.querySelectorAll("#segmode button");
+  for(var i=0;i<btns.length;i++){
+    btns[i].className = (btns[i].getAttribute("data-v") === state.netmode) ? "on" : "";
+  }
+  var sw = document.getElementById("sw_lowbat");
+  if(sw) sw.className = "sw" + (state.lowbat_enable === "1" ? " on" : "");
+}
+
+function setText(id, v){ var e = document.getElementById(id); if(e) e.textContent = v; }
+function setVal(id, v){ var e = document.getElementById(id); if(e && document.activeElement !== e) e.value = v; }
+
+async function refresh(){
+  var r = await SH("sh /data/adb/modules/smart5g/webctl.sh json");
+  var d = null;
+  try { d = JSON.parse(r.stdout); } catch(e) {}
+  if(!d || !d.network){
+    setText("netdesc", "读取失败(" + r.errno + ")：" + ((r.stderr || r.stdout || "无返回")||"").slice(0,80));
+    var lg = document.getElementById("log");
+    if(lg){ lg.textContent = "读取失败\nerrno=" + r.errno + "\n" + (r.stderr||r.stdout||"").slice(0,300); lg.className="log"; }
+    return;
+  }
+  var net = d.network || "-";
+  var is5g = net.indexOf("NR") >= 0;
+  setText("net", is5g ? "5G" : "4G");
+  var nv = document.getElementById("net");
+  if(nv) nv.style.color = is5g ? "var(--ok)" : "var(--p)";
+  setText("netdesc", is5g ? "当前使用 5G 网络" : "已回落 4G（省电/弱信号/高温）");
+  setText("temp", d.temp ? d.temp + "°C" : "-");
+  setText("cap", d.cap ? d.cap + "%" : "-");
+  setText("mode", d.netmode === "auto" ? "自动" : (d.netmode === "4g" ? "4G" : "5G"));
+
+  setVal("temp_high", d.temp_high);
+  setVal("temp_low", d.temp_low);
+  setVal("sig_thres", d.sig_thres);
+  setVal("sig_good", d.sig_good);
+  setVal("lowbat", d.lowbat);
+  setVal("interval", d.interval);
+  setVal("cooldown", d.cooldown);
+
+  state.netmode = d.netmode || "auto";
+  state.lowbat_enable = d.lowbat_enable || "1";
+  paint();
+
+  var logEl = document.getElementById("log");
+  if(logEl){
+    var lines = (d.log || "").split("\n").filter(function(x){ return x.trim() !== ""; });
+    logEl.textContent = lines.length ? lines.slice(-12).join("\n") : "(暂无日志)";
+    logEl.className = "log";
+  }
+}
+
+/* ---- 交互 ---- */
+(function bind(){
+  var btns = document.querySelectorAll("#segmode button");
+  for(var i=0;i<btns.length;i++){
+    btns[i].onclick = function(){
+      state.netmode = this.getAttribute("data-v");
+      paint();
+    };
+  }
+  var sw = document.getElementById("sw_lowbat");
+  if(sw) sw.onclick = function(){
+    state.lowbat_enable = (state.lowbat_enable === "1") ? "0" : "1";
+    paint();
+  };
+})();
+
+async function saveCfg(){
+  var btn = document.getElementById("save");
+  var txt = document.getElementById("saveTxt");
+  btn.disabled = true; if(txt) txt.textContent = "保存中...";
+
+  var parts = ["netmode=" + state.netmode, "lowbat_enable=" + state.lowbat_enable];
+  var ks = ["temp_high","temp_low","sig_thres","sig_good","lowbat","interval","cooldown"];
+  for(var i=0;i<ks.length;i++){
+    var el = document.getElementById(ks[i]);
+    if(el && el.value !== "") parts.push(ks[i] + "=" + el.value);
+  }
+  var r = await SH("sh /data/adb/modules/smart5g/webctl.sh save " + parts.join(" "));
+  btn.disabled = false; if(txt) txt.textContent = "保存并重启守护";
+  TOAST(r.errno === 0 ? "已保存，守护已重启" : "保存失败");
+  setTimeout(refresh, 1200);
+}
+
+refresh();
+setInterval(refresh, 15000);
+</script>
+</body>
+</html>
