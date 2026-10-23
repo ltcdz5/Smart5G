@@ -1,0 +1,62 @@
+name: Build & Release
+
+on:
+  push:
+    branches: [ main ]
+    tags: [ 'v*' ]
+  pull_request:
+    branches: [ main ]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Read module version
+        id: ver
+        run: |
+          VERSION=$(sed -n 's/^version=//p' module/module.prop | head -1)
+          VERCODE=$(sed -n 's/^versionCode=//p' module/module.prop | head -1)
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "vercode=$VERCODE" >> "$GITHUB_OUTPUT"
+          echo "模块版本: $VERSION ($VERCODE)"
+
+      - name: Normalize line endings
+        run: |
+          find module -type f \( -name '*.sh' -o -name '*.prop' -o -name '*.md' \) -exec sed -i 's/\r$//' {} +
+          chmod 755 module/service.sh module/webctl.sh module/bin/netmode.sh
+
+      - name: Syntax check
+        run: |
+          for f in module/service.sh module/webctl.sh module/bin/netmode.sh; do
+            echo "检查 $f"
+            sh -n "$f"
+          done
+
+      - name: Build module zip
+        run: |
+          cd module
+          zip -r "../smart5g-${{ steps.ver.outputs.version }}.zip" . -x '*.bak*' -x '*.git*' -x '*.zip'
+          cd ..
+          ls -lh smart5g-*.zip
+          unzip -l smart5g-*.zip
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: smart5g-${{ steps.ver.outputs.version }}
+          path: smart5g-*.zip
+          if-no-files-found: error
+
+      - name: Create Release
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: smart5g-*.zip
+          generate_release_notes: true
