@@ -39,6 +39,43 @@ jobs:
             sh -n "$f"
           done
 
+      - name: Sync update.json
+        run: |
+          V='${{ steps.ver.outputs.version }}'
+          C='${{ steps.ver.outputs.vercode }}'
+          python3 - <<'PY'
+          import json, os
+          v = os.environ['V']
+          c = int(os.environ['C'])
+          repo = os.environ['GITHUB_REPOSITORY']
+          tag = 'v' + v.lstrip('v')
+          with open('update.json') as f:
+              d = json.load(f)
+          d['version'] = v
+          d['versionCode'] = c
+          d['zipUrl'] = f'https://github.com/{repo}/releases/download/{tag}/smart5g-{v}.zip'
+          with open('update.json','w') as f:
+              json.dump(d, f, indent=2, ensure_ascii=False)
+              f.write('\n')
+          print(json.dumps(d, indent=2, ensure_ascii=False))
+          PY
+        env:
+          V: ${{ steps.ver.outputs.version }}
+          C: ${{ steps.ver.outputs.vercode }}
+
+      - name: Commit update.json if changed
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        run: |
+          if ! git diff --quiet update.json; then
+            git config user.name 'github-actions[bot]'
+            git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+            git add update.json
+            git commit -m 'chore: 同步 update.json 到 ${{ steps.ver.outputs.version }}'
+            git push
+          else
+            echo 'update.json 无变化'
+          fi
+
       - name: Build module zip
         run: |
           cd module

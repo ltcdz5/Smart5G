@@ -1,0 +1,6 @@
+{
+  "version": "v1.0",
+  "versionCode": 1,
+  "zipUrl": "https://github.com/ltcdz5/Smart5G/releases/download/v1.0/smart5g-v1.0.zip",
+  "changelog": "首个版本：高温/低电/弱信号自动回落 4G，条件恢复自动回 5G。静默切换，WebUI 支持日夜主题。"
+}
