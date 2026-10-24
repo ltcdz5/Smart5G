@@ -93,6 +93,7 @@ case "$1" in
     printf '  "temp_high": "%s",\n' "$(getconf temp_high)"
     printf '  "temp_low": "%s",\n' "$(getconf temp_low)"
     printf '  "temp_critical": "%s",\n' "$(getconf temp_critical)"
+    printf '  "temp_low_chg": "%s",\n' "$(getconf temp_low_chg)"
     printf '  "sig_thres": "%s",\n' "$(getconf sig_thres)"
     printf '  "sig_good": "%s",\n' "$(getconf sig_good)"
     printf '  "lowbat": "%s",\n' "$(getconf lowbat)"
@@ -114,7 +115,7 @@ case "$1" in
         netmode)
           case "$v" in auto|4g|5g) ;; *) continue ;; esac
           ;;
-        interval|temp_high|temp_low|temp_critical|sig_thres|sig_good|lowbat|cooldown|probe_interval|probe_window|n78_aggr|lowbat_enable|skip_charging)
+        interval|temp_high|temp_low|temp_critical|temp_low_chg|sig_thres|sig_good|lowbat|cooldown|probe_interval|probe_window|n78_aggr|lowbat_enable|skip_charging)
           case "$v" in *[!0-9-]*) continue ;; esac
           [ -z "$v" ] && continue
           ;;

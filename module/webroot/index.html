@@ -207,6 +207,10 @@ input[type=number]:focus{outline:0;border-color:var(--p);background:var(--surf)}
       <input type="number" id="temp_critical" min="38" max="60">
     </div>
     <div class="row">
+      <div class="txt"><div class="t">充电时降温阈值</div><div class="s">充电中降到此温度以下才回 5G</div></div>
+      <input type="number" id="temp_low_chg" min="30" max="55">
+    </div>
+    <div class="row">
       <div class="txt"><div class="t">探测间隔</div><div class="s">回落 4G 后多久探测一次 5G（秒）</div></div>
       <input type="number" id="probe_interval" min="120" max="3600" step="60">
     </div>
@@ -370,6 +374,7 @@ async function refresh(){
   setVal("interval", d.interval);
   setVal("cooldown", d.cooldown);
   setVal("temp_critical", d.temp_critical);
+  setVal("temp_low_chg", d.temp_low_chg);
   setVal("probe_interval", d.probe_interval);
   setVal("probe_window", d.probe_window);
 
@@ -432,7 +437,7 @@ async function saveCfg(){
                "lowbat_enable=" + state.lowbat_enable,
                "n78_aggr=" + state.n78_aggr,
                "skip_charging=" + state.skip_charging];
-  var ks = ["temp_high","temp_low","temp_critical","sig_thres","sig_good",
+  var ks = ["temp_high","temp_low","temp_critical","temp_low_chg","sig_thres","sig_good",
             "lowbat","interval","cooldown","probe_interval","probe_window"];
   for(var i=0;i<ks.length;i++){
     var el = document.getElementById(ks[i]);

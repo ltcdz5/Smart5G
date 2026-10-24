@@ -74,8 +74,8 @@ read_rsrp_slot() {
 # 默认配置。全新安装时 /data/adb/smart5g.conf 不存在，必须自动生成；
 # 老版本升级时也用它补齐新增的键，避免缺键导致判定走空值。
 DEFAULTS="netmode=auto interval=120 temp_high=40 temp_low=36 temp_critical=45 \
- sig_thres=-100 sig_good=-90 lowbat=20 lowbat_enable=1 n78_aggr=1 \
- skip_charging=0 cooldown=300 probe_interval=300 probe_window=20"
+ temp_low_chg=42 sig_thres=-100 sig_good=-88 lowbat=20 lowbat_enable=1 \
+ n78_aggr=1 skip_charging=0 cooldown=300 probe_interval=300 probe_window=20"
 
 ensure_conf() {
     [ -f "$CONF" ] || : > "$CONF" 2>/dev/null
@@ -87,11 +87,22 @@ ensure_conf() {
     chmod 644 "$CONF" 2>/dev/null
 }
 
+# 判断数据卡当前是否在 n78 上。必须按卡解析：
+# 全局 grep 会把另一张卡的 n78 也算进来，导致误加严。
+slot_has_n78() {
+    local want=$(($1 + 1))
+    timeout 3 dumpsys telephony.registry 2>/dev/null | awk -v want="$want" '
+        /mServiceState=\{/ { phone++ }
+        phone == want && /mBands = \[[0-9, ]*78[,0-9 ]*\]/ { found=1 }
+        END { exit(found ? 0 : 1) }'
+}
+
 load_conf() {
     CONF_netmode=""; CONF_temp_high=""; CONF_temp_low=""; CONF_sig_thres=""
     CONF_sig_good=""; CONF_n78_aggr=""; CONF_skip_charging=""; CONF_cooldown=""
     CONF_lowbat=""; CONF_lowbat_enable=""; CONF_interval=""
     CONF_temp_critical=""; CONF_probe_interval=""; CONF_probe_window=""
+    CONF_temp_low_chg=""
     [ -f "$CONF" ] || return 0
     while IFS='=' read -r k v; do
         case "$k" in
@@ -107,6 +118,7 @@ load_conf() {
             lowbat_enable)   CONF_lowbat_enable="$v" ;;
             interval)        CONF_interval="$v" ;;
             temp_critical)   CONF_temp_critical="$v" ;;
+            temp_low_chg)    CONF_temp_low_chg="$v" ;;
             probe_interval)  CONF_probe_interval="$v" ;;
             probe_window)    CONF_probe_window="$v" ;;
         esac
@@ -134,6 +146,9 @@ loop() {
   log "smart5g started, interval=${interval}s, 数据卡=slot${DS}"
 
   while true; do
+    # 每轮重读间隔，避免改了配置要重启守护才生效
+    interval=$(sed -n 's/^interval=//p' "$CONF" 2>/dev/null | head -1)
+    [ -n "$interval" ] || interval=120
     [ "$first" = "1" ] && first=0 || sleep "$interval"
     n=$(( ${n:-0} + 1 ))
     [ $((n % 10)) -eq 0 ] && { load_conf; DS=$(data_slot); }
@@ -164,6 +179,7 @@ loop() {
     lbth=${CONF_lowbat:-20}
     lben=${CONF_lowbat_enable:-1}
     tcrit=${CONF_temp_critical:-45}
+    tlowchg=${CONF_temp_low_chg:-42}
     pint=${CONF_probe_interval:-300}
     pwin=${CONF_probe_window:-20}
 
@@ -196,18 +212,22 @@ loop() {
       elif [ "$sth" != "0" ]; then
         rsrp=$(read_rsrp_slot "$DS")
         th=$sth
-        if [ "$aggr" = "1" ]; then
-          band=$(timeout 3 dumpsys telephony.registry 2>/dev/null | grep -m1 -oE 'mBands = \[[0-9, ]*78[,0-9 ]*\]')
-          [ -n "$band" ] && th=$((sth + 5))
+        if [ "$aggr" = "1" ] && slot_has_n78 "$DS"; then
+          # 加严幅度必须小于回差（sgood - sth），否则会自相矛盾地制造抖动。
+          # 默认 sth=-100、sgood=-88 → 回差 12；n78 下 +3 后仍有 9 dB。
+          th=$((sth + 3))
         fi
         if [ "$rsrp" -ne 0 ] && [ "$rsrp" -lt "$th" ]; then
           need=1; why="weak"
         fi
       fi
     else
+      # 充电时电池温度天然偏高，用独立的降温阈值，否则高温回落后永远回不到 5G。
+      lo_eff=$lo
+      [ "$chg" = "1" ] && lo_eff=$tlowchg
       temp_ok=0
       case "$reason" in
-        hot) [ "$t" -le "$lo" ] && temp_ok=1 ;;
+        hot) [ "$t" -le "$lo_eff" ] && temp_ok=1 ;;
         *)   [ "$t" -lt "$hi" ] && temp_ok=1 ;;
       esac
       bat_ok=0

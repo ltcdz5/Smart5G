@@ -2,14 +2,15 @@
 netmode=auto            # auto=自动 / 4g=强制4G / 5g=强制5G
 interval=120            # 检测间隔（秒），最小 30
 temp_high=40            # 高温阈值（℃），达到则切 4G
-temp_low=36             # 降温阈值（℃），回落到此值以下才回 5G
+temp_low=36             # 降温阈值（℃），不充电时降到此值以下才回 5G
 temp_critical=45        # 充电时的高温阈值：充电中只在这个温度以上才按高温回落
+temp_low_chg=42         # 充电时的降温阈值：充电中降到此值以下即回 5G
 sig_thres=-100          # 弱信号阈值（dBm），低于则切 4G；设 0 关闭信号判断
-sig_good=-90            # 信号好阈值（dBm），高于则回 5G
-lowbat=20               # 低电量阈值（%）
+sig_good=-88            # 信号好阈值（dBm），高于则回 5G
+lowbat=20               # 低电量阈值（%）；回切需高于此值 +3%
 lowbat_enable=1         # 启用低电量切换
-n78_aggr=1              # n78 聚合时弱信号阈值 +5dB
-skip_charging=0         # 1=充电时不做省电性质的回落（弱信号仍会切）
+n78_aggr=1              # n78 聚合时弱信号阈值 +3dB（加严幅度小于回差，不会自相矛盾）
+skip_charging=0         # 1=充电时不因弱信号回落（低电量判定本来就排除充电）
 cooldown=300            # 切换冷却（秒）
-probe_interval=300      # 回落 4G 后，多久探测一次 5G（秒），失败会翻倍递增
+probe_interval=300      # 因弱信号回落 4G 后，多久探测一次 5G（秒）
 probe_window=20         # 探测时临时放开 NR 的时长（秒）
