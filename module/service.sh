@@ -1,7 +1,6 @@
-#!/system/bin/sh
-# 智能 5G/4G 静默切换守护
-# 配置文件：/data/adb/smart5g.conf
-# 日志：    /data/adb/smart5g.log
+#!/bin/sh
+# 智能 5G/4G 静默切换守护（按数据卡操作）
+# 配置：/data/adb/smart5g.conf   日志：/data/adb/smart5g.log
 
 MODDIR=${0%/*}
 CONF=/data/adb/smart5g.conf
@@ -10,6 +9,7 @@ COOL=/data/adb/.smart5g_last
 REASON=/data/adb/.smart5g_reason
 STUCK=/data/adb/.smart5g_4g_since
 BACKOFF=/data/adb/.smart5g_backoff
+COVERLOG=/data/adb/.smart5g_cover_log
 
 log() { echo "[$(date '+%m-%d %H:%M:%S')] $1" >> "$LOG"; }
 
@@ -20,7 +20,6 @@ rotate() {
 }
 
 is_charging() {
-    # 以 status 为主要判据（各家充电驱动对电流正负号定义不一致，只看 current_now 会误判）
     case "$(cat /sys/class/power_supply/battery/status 2>/dev/null)" in
         *Charging*|*Full*) return 0 ;;
     esac
@@ -30,12 +29,46 @@ is_charging() {
     return 1
 }
 
-# 以"NR 是否被允许"为唯一判据。
-# 不能用 gsm.network.type：关掉 NR 后该属性会残留 "NR_SA"（GT5 Pro 实测），
-# 据此判断会把 4G 状态误判成 5G，导致高温/弱信号分支永远不触发。
-nr_allowed() {
-    cmd phone get-allowed-network-types-for-users 2>/dev/null \
+# ---------- 数据卡相关 ----------
+data_slot() {
+    local sub slot
+    sub=$(settings get global multi_sim_data_call 2>/dev/null)
+    case "$sub" in ''|-1|*[!0-9]*) echo 0; return ;; esac
+    slot=$(dumpsys isub 2>/dev/null | awk -v want="$sub" '
+        /SubscriptionInfoInternal/ {
+            id=""; sl="";
+            if (match($0, /id=[0-9]+/)) { t=substr($0, RSTART, RLENGTH); sub(/id=/, "", t); id=t }
+            if (match($0, /simSlotIndex=[0-9]+/)) { t=substr($0, RSTART, RLENGTH); sub(/.*=/, "", t); sl=t }
+            if (id == want && sl != "") { print sl; exit }
+        }')
+    echo "${slot:-0}"
+}
+
+slot_type() {
+    local v
+    v=$(getprop gsm.network.type 2>/dev/null)
+    [ -z "$v" ] && { echo ""; return; }
+    echo "$v" | cut -d, -f$(($1 + 1))
+}
+
+slot_nr_allowed() {
+    cmd phone get-allowed-network-types-for-users -s "$1" 2>/dev/null \
         | tr '|' '\n' | grep -qx "NR"
+}
+
+# 按卡读取 NR 的 ssRsrp。dumpsys 里每个 phone 一个 mServiceState 块，
+# 块内的 mSignalStrength 行才带本卡的 ssRsrp；不能全局取最小值，否则两卡混算。
+read_rsrp_slot() {
+    local want=$(($1 + 1)) v
+    v=$(timeout 3 dumpsys telephony.registry 2>/dev/null | awk -v want="$want" '
+        /mServiceState=\{/ { phone++ }
+        /mSignalStrength=/ && /CellSignalStrengthNr/ && phone == want {
+            if (match($0, /ssRsrp = -?[0-9]+/)) {
+                v = substr($0, RSTART + 9, RLENGTH - 9)
+                if (v != "2147483647") print v
+            }
+        }' | head -1)
+    echo "${v:-0}"
 }
 
 load_conf() {
@@ -64,54 +97,29 @@ load_conf() {
     done < "$CONF"
 }
 
-read_rsrp() {
-    local v
-    v=$(timeout 3 dumpsys telephony.registry 2>/dev/null | tr ',' '\n' \
-        | awk '/mNr=CellSignalStrengthNr/{f=1} f&&/ssRsrp/{print; f=0}' \
-        | grep -oE '\-?[0-9]+' | grep -v 2147483647 | sort -n | head -1)
-    if [ -z "$v" ]; then
-        v=$(timeout 3 dumpsys telephony.registry 2>/dev/null \
-            | grep -oE 'ssRsrp = -?[0-9]+' | head -4 \
-            | grep -oE '\-?[0-9]+' | grep -v 2147483647 | sort -n | head -1)
-    fi
-    echo "${v:-0}"
-}
-
-# 探测一次 5G：临时放开 NR，等 probe_window 秒后测 RSRP。
-# 返回测到的 RSRP（0 表示仍然读不到）。调用方决定保持还是重新关闭。
-probe_nr() {
-    local pw="$1" r
-    sh "$MODDIR/bin/netmode.sh" 5g >> "$LOG" 2>&1
-    sleep "$pw"
-    r=$(read_rsrp)
-    echo "$r"
-}
-
 i=0
 while [ "$(getprop sys.boot_completed)" != "1" ] && [ $i -lt 120 ]; do sleep 1; i=$((i+1)); done
 sleep 3
 [ -f "$CONF" ] || { log "no conf, exit"; exit 0; }
 rotate "$LOG"
 
-smart5g_loop() {
-  local rsrp t b78 chg hi lo sth sgood aggr skipchg cd now last cur curm allowed
-  local hot need can th interval band
-  local cap lbth lben lowbat chg0 why reason temp_ok bat_ok since
-  local first=1
-  local failcnt=0
-  local tcrit pint pwin forced_tick=0
-  local bko nb
+loop() {
+  local rsrp t cap chg hi lo sth sgood aggr skipchg cd now last
+  local need can th interval lbth lben why reason temp_ok bat_ok
+  local first=1 failcnt=0 forced_tick=0 n
+  local tcrit pint pwin bko nb since
+  local DS dtype allowed on_nr band
 
   load_conf
   interval=${CONF_interval:-120}
-  log "smart5g started, interval=${interval}s"
+  DS=$(data_slot)
+  log "smart5g started, interval=${interval}s, 数据卡=slot${DS}"
 
   while true; do
     [ "$first" = "1" ] && first=0 || sleep "$interval"
+    n=$(( ${n:-0} + 1 ))
+    [ $((n % 10)) -eq 0 ] && { load_conf; DS=$(data_slot); }
 
-    RR=$(( ${RR:-0} + 1 ))
-    [ $((RR % 10)) -eq 0 ] && load_conf
-    # 强制模式下不判定，但要留心跳日志，避免用户误以为守护挂了
     if [ "${CONF_netmode:-auto}" != "auto" ]; then
       forced_tick=$((forced_tick+1))
       [ $((forced_tick % 10)) -eq 1 ] && log "强制模式 ${CONF_netmode}，守护跳过判定（心跳）"
@@ -124,21 +132,9 @@ smart5g_loop() {
         /sys/class/power_supply/battery/capacity \
         /sys/class/power_supply/battery/current_now 2>/dev/null | tr '\n' ' ')
     set -- $bvals
-    t=${1:-0}; cap=${2:-0}; chg0=${3:-0}
+    t=${1:-0}; cap=${2:-0}
     [ "$t" = "0" ] && continue
     t=$((t/10))
-
-    # 当前网络档位：查"NR 是否被允许"，而不是"modem 注册在哪种 RAT"
-    cur=$(getprop gsm.network.type)
-    if cmd phone get-allowed-network-types-for-users >/dev/null 2>&1; then
-      if nr_allowed; then curm=5g; else curm=4g; fi
-    else
-      # 兜底：cmd 不可用时退回属性判断（含 NR 才视为 5G）
-      case "$cur" in
-        *NR*) curm=5g ;;
-        *)    curm=4g ;;
-      esac
-    fi
 
     hi=${CONF_temp_high:-40}
     lo=${CONF_temp_low:-36}
@@ -153,17 +149,15 @@ smart5g_loop() {
     pint=${CONF_probe_interval:-300}
     pwin=${CONF_probe_window:-20}
 
+    dtype=$(slot_type "$DS")
+    if slot_nr_allowed "$DS"; then allowed=1; else allowed=0; fi
+    case "$dtype" in *NR*) on_nr=1 ;; *) on_nr=0 ;; esac
+
     chg=0; is_charging && chg=1
 
-    # 充电时电池温度天然偏高（快充 42℃ 属正常），不能当"手机烫"。
-    # 只有超过 temp_critical 才在充电中也按高温回落。
     hot=0
     if [ "$t" -ge "$hi" ]; then
-      if [ "$chg" = "1" ] && [ "$t" -lt "$tcrit" ]; then
-        hot=0
-      else
-        hot=1
-      fi
+      if [ "$chg" = "1" ] && [ "$t" -lt "$tcrit" ]; then hot=0; else hot=1; fi
     fi
 
     lowbat=0
@@ -175,13 +169,14 @@ smart5g_loop() {
     now=$(date +%s)
     reason=$(cat "$REASON" 2>/dev/null || echo "")
 
-    if [ "$curm" = "5g" ]; then
+    if [ "$on_nr" = "1" ]; then
+      # 数据卡确实注册在 5G 上，才按阈值判断要不要回落
       if [ "$hot" = "1" ]; then
         need=1; why="hot"
       elif [ "$lowbat" = "1" ]; then
         need=1; why="lowbat"
       elif [ "$sth" != "0" ]; then
-        rsrp=$(read_rsrp)
+        rsrp=$(read_rsrp_slot "$DS")
         th=$sth
         if [ "$aggr" = "1" ]; then
           band=$(timeout 3 dumpsys telephony.registry 2>/dev/null | grep -m1 -oE 'mBands = \[[0-9, ]*78[,0-9 ]*\]')
@@ -197,53 +192,73 @@ smart5g_loop() {
         hot) [ "$t" -le "$lo" ] && temp_ok=1 ;;
         *)   [ "$t" -lt "$hi" ] && temp_ok=1 ;;
       esac
-
       bat_ok=0
-      if [ -z "$cap" ]; then
-        bat_ok=1
-      elif [ "$lben" != "1" ]; then
-        bat_ok=1
-      elif [ "$cap" -gt "$((lbth + 3))" ]; then
-        bat_ok=1
+      if [ -z "$cap" ]; then bat_ok=1
+      elif [ "$lben" != "1" ]; then bat_ok=1
+      elif [ "$cap" -gt "$((lbth + 3))" ]; then bat_ok=1
       fi
 
-      if [ "$temp_ok" = "1" ] && [ "$bat_ok" = "1" ]; then
-        rsrp=$(read_rsrp)
-        if [ "$rsrp" -ne 0 ] && [ "$rsrp" -ge "$sgood" ]; then
-          can=1
-          rm -f "$STUCK"
-        elif [ "$rsrp" -eq 0 ]; then
-          if [ "$reason" != "weak" ]; then
-            # 因高温/低电回落：信号本来就不是原因，条件恢复即可直接回 5G
-            can=1
-            rm -f "$STUCK" "$BACKOFF"
-            log "温度/电量已恢复（旧原因=${reason}），直接切回 5G"
-          else
-            # 因弱信号回落：NR 关闭后 modem 不再上报 NR 测量值，只能定时探测。
-            # 失败一次间隔翻倍（上限 3600 秒），避免弱信号区每 10 分钟反复折腾。
+      if [ "$allowed" = "1" ]; then
+        # NR 已允许，但数据卡停在 LTE。
+        # 实测：用掩码把 NR 关掉再放开后，modem 有时不会自己重新注册 NR，
+        # 会一直卡在 LTE（掩码与 type 不一致）。按退避间隔做一次重新注册。
+        if [ "$temp_ok" = "1" ] && [ "$bat_ok" = "1" ]; then
+          if [ -n "$reason" ]; then rm -f "$REASON"; reason=""; fi
+          since=$(cat "$STUCK" 2>/dev/null || echo 0)
+          bko=$(cat "$BACKOFF" 2>/dev/null || echo "$pint")
+          [ -n "$bko" ] || bko="$pint"
+          if [ "$since" = "0" ] || [ -z "$since" ]; then
+            echo "$now" > "$STUCK"
+          elif [ $((now - since)) -ge "$bko" ]; then
+            echo "$now" > "$STUCK"
+            log "数据卡(slot${DS})在 4G 但 NR 已允许，尝试重新注册（间隔${bko}s）"
+            res=$(sh "$MODDIR/bin/netmode.sh" refresh 2>&1 | tail -1)
+            dtype=$(slot_type "$DS")
+            case "$dtype" in *NR*) on_nr=1 ;; *) on_nr=0 ;; esac
+            if [ "$on_nr" = "1" ]; then
+              can=1; rm -f "$BACKOFF" "$STUCK"
+              log "重新注册成功（${res}），数据卡已回到 5G"
+            else
+              nb=$((bko * 2)); [ "$nb" -gt 3600 ] && nb=3600
+              echo "$nb" > "$BACKOFF"
+              log "重新注册未成功（${res}），下次尝试在 ${nb} 秒后"
+            fi
+          fi
+        fi
+      else
+        # 我们自己（或用户手动）把 NR 关了，条件恢复就放回去
+        if [ "$temp_ok" = "1" ] && [ "$bat_ok" = "1" ]; then
+          if [ "$reason" = "weak" ]; then
             since=$(cat "$STUCK" 2>/dev/null || echo 0)
             bko=$(cat "$BACKOFF" 2>/dev/null || echo "$pint")
             [ -n "$bko" ] || bko="$pint"
             if [ "$since" = "0" ] || [ -z "$since" ]; then
               echo "$now" > "$STUCK"
-              log "4G 下读不到 NR 信号，${bko} 秒后探测一次"
+              log "因弱信号回落，${bko} 秒后探测一次"
             elif [ $((now - since)) -ge "$bko" ]; then
               rm -f "$STUCK"
               log "开始探测 5G（临时放开 NR ${pwin} 秒）"
-              rsrp=$(probe_nr "$pwin")
-              if [ "$rsrp" -ne 0 ] && [ "$rsrp" -ge "$sgood" ]; then
+              sh "$MODDIR/bin/netmode.sh" 5g -s "$DS" >> "$LOG" 2>&1
+              sleep "$pwin"
+              rsrp=$(read_rsrp_slot "$DS")
+              dtype=$(slot_type "$DS")
+              case "$dtype" in *NR*) on_nr=1 ;; *) on_nr=0 ;; esac
+              if [ "$on_nr" = "1" ] && [ "$rsrp" -ne 0 ] && [ "$rsrp" -ge "$sgood" ]; then
                 can=1
                 rm -f "$BACKOFF"
-                log "探测成功：rsrp=${rsrp}dBm（达到 ${sgood}），保持 5G"
+                log "探测成功：rsrp=${rsrp}dBm，保持 5G"
               else
-                sh "$MODDIR/bin/netmode.sh" 4g >> "$LOG" 2>&1
+                sh "$MODDIR/bin/netmode.sh" 4g -s "$DS" >> "$LOG" 2>&1
                 echo "$now" > "$STUCK"
-                nb=$((bko * 2))
-                [ "$nb" -gt 3600 ] && nb=3600
+                nb=$((bko * 2)); [ "$nb" -gt 3600 ] && nb=3600
                 echo "$nb" > "$BACKOFF"
-                log "探测失败：rsrp=${rsrp}（需 ${sgood}），回落 4G；下次探测在 ${nb} 秒后"
+                log "探测失败：rsrp=${rsrp} type=${dtype}，回落 4G；下次探测在 ${nb} 秒后"
               fi
             fi
+          else
+            can=1
+            rm -f "$STUCK" "$BACKOFF"
+            log "温度/电量已恢复（旧原因=${reason:-无}），切回 5G"
           fi
         fi
       fi
@@ -255,19 +270,15 @@ smart5g_loop() {
     [ $((now - last)) -lt "$cd" ] && continue
 
     if [ "$need" = "1" ]; then
-      if [ "$skipchg" = "1" ] && [ "$chg" = "1" ] && [ "$hot" = "0" ]; then
-        continue
-      fi
+      if [ "$skipchg" = "1" ] && [ "$chg" = "1" ] && [ "$hot" = "0" ]; then continue; fi
       case "${why:-unknown}" in
-        lowbat) log "切4G[低电量]: cap=${cap}%(阈值${lbth}%) temp=${t}C" ;;
-        hot)    log "切4G[高温]: temp=${t}C(阈值${hi}) chg=${chg} rsrp=${rsrp}" ;;
-        weak)   log "切4G[弱信号]: rsrp=${rsrp}dBm(阈值${th}) temp=${t}C" ;;
-        *)      log "切4G[未知]: temp=${t}C cap=${cap}%" ;;
+        lowbat) log "切4G[低电量]: cap=${cap}%(阈值${lbth}%) temp=${t}C slot${DS}" ;;
+        hot)    log "切4G[高温]: temp=${t}C(阈值${hi}) chg=${chg} slot${DS}" ;;
+        weak)   log "切4G[弱信号]: rsrp=${rsrp}dBm(阈值${th}) temp=${t}C slot${DS}" ;;
+        *)      log "切4G[未知]: temp=${t}C cap=${cap}% slot${DS}" ;;
       esac
-      if sh "$MODDIR/bin/netmode.sh" 4g >> "$LOG" 2>&1; then
-        echo "$now" > "$COOL"
-        echo "${why:-unknown}" > "$REASON"
-        failcnt=0
+      if sh "$MODDIR/bin/netmode.sh" 4g -s "$DS" >> "$LOG" 2>&1; then
+        echo "$now" > "$COOL"; echo "${why:-unknown}" > "$REASON"; failcnt=0
       else
         log "  ↑ 切换失败，60 秒后重试"
         echo $((now - cd + 60)) > "$COOL"
@@ -275,11 +286,18 @@ smart5g_loop() {
         [ $failcnt -ge 3 ] && log "!! 连续 ${failcnt} 次切换失败，请检查 cmd phone 可用性"
       fi
     else
-      log "切5G: temp=${t}C cap=${cap}%(已过$((lbth+3))%) rsrp=${rsrp}(优于${sgood})"
-      if sh "$MODDIR/bin/netmode.sh" 5g >> "$LOG" 2>&1; then
-        echo "$now" > "$COOL"
-        rm -f "$REASON" "$STUCK" "$BACKOFF"
-        failcnt=0
+      log "切5G: temp=${t}C cap=${cap}% rsrp=${rsrp} slot${DS}"
+      if sh "$MODDIR/bin/netmode.sh" 5g -s "$DS" >> "$LOG" 2>&1; then
+        echo "$now" > "$COOL"; rm -f "$REASON" "$STUCK" "$BACKOFF"; failcnt=0
+        # 放开 NR 不等于已注册，验证一次；没注册就推一把
+        dtype=$(slot_type "$DS")
+        case "$dtype" in
+          *NR*) ;;
+          *)
+            res=$(sh "$MODDIR/bin/netmode.sh" refresh 2>&1 | tail -1)
+            log "放开 NR 后数据卡未注册，重新注册：${res}"
+            ;;
+        esac
       else
         log "  ↑ 切换失败，60 秒后重试"
         echo $((now - cd + 60)) > "$COOL"
@@ -290,15 +308,7 @@ smart5g_loop() {
   done
 }
 
-NM=$(sed -n 's/^netmode=//p' "$CONF" 2>/dev/null | head -1)
-case "$NM" in
-  4g)  sh "$MODDIR/bin/netmode.sh" 4g >> "$LOG" 2>&1 ;;
-  5g)  sh "$MODDIR/bin/netmode.sh" 5g >> "$LOG" 2>&1 ;;
-esac
-
-# ---------- 单实例保护 ----------
-# pkill 发 SIGTERM 在本机杀不掉（实测退出码 0 但进程仍在），所以用锁目录兜底，
-# 避免反复保存配置后堆出多个守护互相打架。
+# 单实例保护
 LOCKDIR=/data/adb/.smart5g.lock
 if ! mkdir "$LOCKDIR" 2>/dev/null; then
     OLD=$(cat "$LOCKDIR/pid" 2>/dev/null)
@@ -312,7 +322,13 @@ fi
 echo $$ > "$LOCKDIR/pid"
 trap 'rm -rf "$LOCKDIR"' EXIT INT TERM
 
-smart5g_loop &
+NM=$(sed -n 's/^netmode=//p' "$CONF" 2>/dev/null | head -1)
+case "$NM" in
+  4g) sh "$MODDIR/bin/netmode.sh" 4g >> "$LOG" 2>&1 ;;
+  5g) sh "$MODDIR/bin/netmode.sh" 5g >> "$LOG" 2>&1 ;;
+esac
+
+loop &
 LOOP_PID=$!
 log "smart5g watcher started (pid $$, loop $LOOP_PID)"
 wait $LOOP_PID

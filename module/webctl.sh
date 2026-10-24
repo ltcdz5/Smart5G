@@ -1,35 +1,61 @@
 #!/system/bin/sh
-# WebUI 控制脚本（JSON 安全转义版）
+# WebUI 控制脚本（按数据卡）
 MODDIR=/data/adb/modules/smart5g
 CONF=/data/adb/smart5g.conf
 LOG=/data/adb/smart5g.log
 
 getconf() { sed -n "s/^$1=//p" "$CONF" 2>/dev/null | head -1; }
 
-# 把多行日志转成一个合法的 JSON 字符串内容：
-# 反斜杠 -> \\ ，双引号 -> \" ，换行 -> 字面量 \n
 json_escape() {
     sed 's/\\/\\\\/g; s/"/\\"/g; s/\r//g' \
       | awk 'BEGIN{ORS=""} {if(NR>1) printf "\\n"; printf "%s", $0}'
 }
 
-# NR 是否被允许（掩码判据）。这是唯一可信的"当前是不是 5G"来源，
-# 不能用 gsm.network.type：关掉 NR 后该属性会残留 NR_SA，实测会误判。
-nr_allowed() {
-    cmd phone get-allowed-network-types-for-users 2>/dev/null \
+sh "$MODDIR/bin/netmode.sh" status >/dev/null 2>&1
+
+data_slot() {
+    local sub slot
+    sub=$(settings get global multi_sim_data_call 2>/dev/null)
+    case "$sub" in ''|-1|*[!0-9]*) echo 0; return ;; esac
+    slot=$(dumpsys isub 2>/dev/null | awk -v want="$sub" '
+        /SubscriptionInfoInternal/ {
+            id=""; sl="";
+            if (match($0, /id=[0-9]+/)) { t=substr($0, RSTART, RLENGTH); sub(/id=/, "", t); id=t }
+            if (match($0, /simSlotIndex=[0-9]+/)) { t=substr($0, RSTART, RLENGTH); sub(/.*=/, "", t); sl=t }
+            if (id == want && sl != "") { print sl; exit }
+        }')
+    echo "${slot:-0}"
+}
+
+slot_type() {
+    local v
+    v=$(getprop gsm.network.type 2>/dev/null)
+    [ -z "$v" ] && { echo ""; return; }
+    echo "$v" | cut -d, -f$(($1 + 1))
+}
+
+slot_nr_allowed() {
+    cmd phone get-allowed-network-types-for-users -s "$1" 2>/dev/null \
         | tr '|' '\n' | grep -qx "NR"
+}
+
+slot_sim_name() {
+    dumpsys isub 2>/dev/null | awk -v want="$1" '
+        /SubscriptionInfoInternal/ {
+            sl=""; nm="";
+            if (match($0, /simSlotIndex=[0-9]+/)) { t=substr($0, RSTART, RLENGTH); sub(/.*=/, "", t); sl=t }
+            if (match($0, /displayName=[^ ]+/)) { t=substr($0, RSTART, RLENGTH); sub(/displayName=/, "", t); nm=t }
+            if (sl == want && nm != "") { print nm; exit }
+        }'
 }
 
 case "$1" in
   json)
-    net=$(getprop gsm.network.type 2>/dev/null)
-    [ -z "$net" ] && net="unknown"
-    if cmd phone get-allowed-network-types-for-users >/dev/null 2>&1; then
-      if nr_allowed; then nr=1; else nr=0; fi
-    else
-      # 兜底：cmd 不可用时按属性里是否含 NR 判断
-      case "$net" in *NR*) nr=1 ;; *) nr=0 ;; esac
-    fi
+    DS=$(data_slot)
+    dtype=$(slot_type "$DS")
+    [ -z "$dtype" ] && dtype="unknown"
+    if slot_nr_allowed "$DS"; then nr=1; else nr=0; fi
+    all=$(getprop gsm.network.type 2>/dev/null)
     temp=$(awk '{printf "%d", $1/10}' /sys/class/power_supply/battery/temp 2>/dev/null)
     cap=$(cat /sys/class/power_supply/battery/capacity 2>/dev/null)
     chg=0
@@ -38,7 +64,10 @@ case "$1" in
     esac
     logtxt=$(tail -12 "$LOG" 2>/dev/null | json_escape)
     printf '{\n'
-    printf '  "network": "%s",\n' "$net"
+    printf '  "network": "%s",\n' "$dtype"
+    printf '  "all_slots": "%s",\n' "$all"
+    printf '  "data_slot": "%s",\n' "$DS"
+    printf '  "data_sim": "%s",\n' "$(slot_sim_name "$DS")"
     printf '  "nr_allowed": "%s",\n' "$nr"
     printf '  "charging": "%s",\n' "$chg"
     printf '  "temp": "%s",\n' "$temp"
@@ -67,21 +96,13 @@ case "$1" in
       v=${kv#*=}
       case "$k" in
         netmode)
-          # 枚举值（auto / 4g / 5g），不能走纯数字校验
-          case "$v" in
-            auto|4g|5g) ;;
-            *) continue ;;
-          esac
+          case "$v" in auto|4g|5g) ;; *) continue ;; esac
           ;;
         interval|temp_high|temp_low|temp_critical|sig_thres|sig_good|lowbat|cooldown|probe_interval|probe_window|n78_aggr|lowbat_enable|skip_charging)
-          case "$v" in
-            *[!0-9-]*) continue ;;
-          esac
+          case "$v" in *[!0-9-]*) continue ;; esac
           [ -z "$v" ] && continue
           ;;
-        *)
-          continue
-          ;;
+        *) continue ;;
       esac
       if grep -q "^$k=" "$CONF" 2>/dev/null; then
         sed -i "s|^$k=.*|$k=$v|" "$CONF"
@@ -89,43 +110,35 @@ case "$1" in
         echo "$k=$v" >> "$CONF"
       fi
     done
-    # 按 PID 精确停守护。
-    # 不能用 pkill -f '...service.sh'：实测会连带杀掉调用链上的进程（webctl 被自己打死，
-    # 导致 netmode 没下发、守护没重启）。这里用锁文件里的 pid + 它的子进程（循环子壳）。
     LOCK=/data/adb/.smart5g.lock
     OLDPID=$(cat "$LOCK/pid" 2>/dev/null)
     if [ -n "$OLDPID" ] && [ -d "/proc/$OLDPID" ]; then
       for c in $(pgrep -P "$OLDPID" 2>/dev/null); do kill -9 "$c" 2>/dev/null; done
       kill -9 "$OLDPID" 2>/dev/null
     fi
-    # 兜底：清掉可能残留的同路径进程（按绝对路径精确匹配，跳过自身）
     for p in $(pgrep -f "modules/smart5g/service[.]sh" 2>/dev/null); do
       [ "$p" = "$$" ] && continue
       kill -9 "$p" 2>/dev/null
     done
     sleep 1
     rm -rf "$LOCK"
-    # 切回自动时清掉残留状态：上次"被迫回落 4G"的理由/冷却/卡住计时都不该继续生效，
-    # 否则会卡在 4G 里等温度降到 temp_low 或等探测窗口。
     NMNOW=$(sed -n 's/^netmode=//p' "$CONF" 2>/dev/null | head -1)
     if [ "$NMNOW" = "auto" ]; then
-      rm -f /data/adb/.smart5g_reason /data/adb/.smart5g_4g_since /data/adb/.smart5g_last
-      # 手动回到自动 = 立即恢复 5G 能力，之后由守护按阈值重新判断
+      rm -f /data/adb/.smart5g_reason /data/adb/.smart5g_4g_since /data/adb/.smart5g_backoff
       sh "$MODDIR/bin/netmode.sh" 5g >> "$LOG" 2>&1
     else
-      # 强制 4G / 强制 5G：立即生效，不等守护重启
       sh "$MODDIR/bin/netmode.sh" "$NMNOW" >> "$LOG" 2>&1
     fi
     setsid sh "$MODDIR/service.sh" >/dev/null 2>&1 &
     echo "saved"
     ;;
-  4g|5g)
+  4g|5g|refresh)
     sh "$MODDIR/bin/netmode.sh" "$1"
     ;;
   status)
     sh "$MODDIR/bin/netmode.sh" status
     ;;
   *)
-    echo "usage: webctl.sh json|save k=v...|4g|5g|status"
+    echo "usage: webctl.sh json|save k=v...|4g|5g|refresh|status"
     ;;
 esac

@@ -135,7 +135,7 @@ input[type=number]:focus{outline:0;border-color:var(--p);background:var(--surf)}
 </div>
 
 <div class="status" id="statusCard">
-  <div class="k">当前网络</div>
+  <div class="k" id="netLabel">当前数据卡网络</div>
   <div class="v" id="net">-</div>
   <div class="d" id="netdesc">读取中...</div>
   <div class="st-grid">
@@ -156,6 +156,10 @@ input[type=number]:focus{outline:0;border-color:var(--p);background:var(--surf)}
       <button data-v="4g">强制 4G</button>
       <button data-v="5g">强制 5G</button>
     </div>
+    <button id="btnRefresh" onclick="doRefresh()" style="margin-top:10px;width:100%;border:0;border-radius:12px;padding:12px;font-family:inherit;font-size:13.5px;font-weight:600;background:var(--sclow);color:var(--p);cursor:pointer">
+      重新注册 5G（卡在 4G 时用）
+    </button>
+    <div class="hint" style="padding:8px 2px 0">有时 5G 已允许但手机没自己注册，点这里轻推一次；不行会自动退一步用飞行模式。</div>
   </div>
 </div>
 
@@ -331,16 +335,29 @@ async function refresh(){
     if(lg){ lg.textContent = "读取失败\nerrno=" + r.errno + "\n" + (r.stderr||r.stdout||"").slice(0,300); lg.className="log"; }
     return;
   }
-  var net = d.network || "-";
-  // 以掩码为准（gsm.network.type 关 NR 后会残留 NR_SA，实测会误判）
-  var is5g = (d.nr_allowed !== undefined && d.nr_allowed !== "")
-      ? (d.nr_allowed === "1")
-      : (net.indexOf("NR") >= 0);
+  var net = d.network || "-";           // 数据卡的实际 RAT
+  var allslots = d.all_slots || "";
+  var dslot = d.data_slot;
+  var is5g = net.indexOf("NR") >= 0;    // 以数据卡实际注册为准
   setText("net", is5g ? "5G" : "4G");
   var nv = document.getElementById("net");
   if(nv) nv.style.color = is5g ? "var(--ok)" : "var(--p)";
   var chgtip = (d.charging === "1") ? " ｜ 充电中" : "";
-  setText("netdesc", (is5g ? "当前使用 5G 网络" : "已回落 4G（省电/弱信号/高温）") + chgtip + " ｜ " + net);
+  var slotip = "";
+  if (dslot !== undefined && dslot !== "") {
+    var simNo = (parseInt(dslot, 10) + 1);
+    var simName = d.data_sim || "";
+    slotip = " ｜ 数据卡 SIM" + simNo + (simName ? "（" + simName + "）" : "");
+  }
+  var tip;
+  if (is5g) {
+    tip = "数据卡在 5G";
+  } else if (d.nr_allowed === "1") {
+    tip = "数据卡在 4G（5G 已允许，等待注册）";
+  } else {
+    tip = "已回落 4G（省电/弱信号/高温）";
+  }
+  setText("netdesc", tip + chgtip + slotip + (allslots ? " ｜ 全部 " + allslots : ""));
   setText("temp", d.temp ? d.temp + "°C" : "-");
   setText("cap", d.cap ? d.cap + "%" : "-");
   setText("mode", d.netmode === "auto" ? "自动" : (d.netmode === "4g" ? "4G" : "5G"));
@@ -395,6 +412,16 @@ async function refresh(){
     paint();
   };
 })();
+
+async function doRefresh(){
+  var b = document.getElementById("btnRefresh");
+  if (b) { b.disabled = true; b.textContent = "重新注册中…（最多 40 秒）"; }
+  var r = await SH("sh /data/adb/modules/smart5g/webctl.sh refresh");
+  if (b) { b.disabled = false; b.textContent = "重新注册 5G（卡在 4G 时用）"; }
+  var out = (r.stdout || "").trim();
+  TOAST(out === "already-nr" ? "已经在 5G 上" : (out.indexOf("refresh-ok") === 0 ? "已重新注册，回到 5G" : "重新注册未成功"));
+  setTimeout(refresh, 1500);
+}
 
 async function saveCfg(){
   var btn = document.getElementById("save");
