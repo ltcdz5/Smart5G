@@ -9,6 +9,7 @@ LOG=/data/adb/smart5g.log
 COOL=/data/adb/.smart5g_last
 REASON=/data/adb/.smart5g_reason
 STUCK=/data/adb/.smart5g_4g_since
+BACKOFF=/data/adb/.smart5g_backoff
 
 log() { echo "[$(date '+%m-%d %H:%M:%S')] $1" >> "$LOG"; }
 
@@ -99,6 +100,7 @@ smart5g_loop() {
   local first=1
   local failcnt=0
   local tcrit pint pwin forced_tick=0
+  local bko nb
 
   load_conf
   interval=${CONF_interval:-120}
@@ -148,7 +150,7 @@ smart5g_loop() {
     lbth=${CONF_lowbat:-20}
     lben=${CONF_lowbat_enable:-1}
     tcrit=${CONF_temp_critical:-45}
-    pint=${CONF_probe_interval:-600}
+    pint=${CONF_probe_interval:-300}
     pwin=${CONF_probe_window:-20}
 
     chg=0; is_charging && chg=1
@@ -207,26 +209,40 @@ smart5g_loop() {
 
       if [ "$temp_ok" = "1" ] && [ "$bat_ok" = "1" ]; then
         rsrp=$(read_rsrp)
-        if [ "$rsrp" -ne 0 ] && [ "$rsrp" -gt "$sgood" ]; then
+        if [ "$rsrp" -ne 0 ] && [ "$rsrp" -ge "$sgood" ]; then
           can=1
           rm -f "$STUCK"
         elif [ "$rsrp" -eq 0 ]; then
-          # NR 被关闭时 modem 不再上报 NR 测量值，只能靠定时探测。
-          since=$(cat "$STUCK" 2>/dev/null || echo 0)
-          if [ "$since" = "0" ] || [ -z "$since" ]; then
-            echo "$now" > "$STUCK"
-            log "4G 下读不到 NR 信号，${pint} 秒后探测一次"
-          elif [ $((now - since)) -gt "$pint" ]; then
-            rm -f "$STUCK"
-            log "开始探测 5G（临时放开 NR ${pwin} 秒）"
-            rsrp=$(probe_nr "$pwin")
-            if [ "$rsrp" -ne 0 ] && [ "$rsrp" -gt "$sgood" ]; then
-              can=1
-              log "探测成功：rsrp=${rsrp}dBm（优于${sgood}），保持 5G"
-            else
-              sh "$MODDIR/bin/netmode.sh" 4g >> "$LOG" 2>&1
+          if [ "$reason" != "weak" ]; then
+            # 因高温/低电回落：信号本来就不是原因，条件恢复即可直接回 5G
+            can=1
+            rm -f "$STUCK" "$BACKOFF"
+            log "温度/电量已恢复（旧原因=${reason}），直接切回 5G"
+          else
+            # 因弱信号回落：NR 关闭后 modem 不再上报 NR 测量值，只能定时探测。
+            # 失败一次间隔翻倍（上限 3600 秒），避免弱信号区每 10 分钟反复折腾。
+            since=$(cat "$STUCK" 2>/dev/null || echo 0)
+            bko=$(cat "$BACKOFF" 2>/dev/null || echo "$pint")
+            [ -n "$bko" ] || bko="$pint"
+            if [ "$since" = "0" ] || [ -z "$since" ]; then
               echo "$now" > "$STUCK"
-              log "探测失败：rsrp=${rsrp}，重新回落 4G"
+              log "4G 下读不到 NR 信号，${bko} 秒后探测一次"
+            elif [ $((now - since)) -ge "$bko" ]; then
+              rm -f "$STUCK"
+              log "开始探测 5G（临时放开 NR ${pwin} 秒）"
+              rsrp=$(probe_nr "$pwin")
+              if [ "$rsrp" -ne 0 ] && [ "$rsrp" -ge "$sgood" ]; then
+                can=1
+                rm -f "$BACKOFF"
+                log "探测成功：rsrp=${rsrp}dBm（达到 ${sgood}），保持 5G"
+              else
+                sh "$MODDIR/bin/netmode.sh" 4g >> "$LOG" 2>&1
+                echo "$now" > "$STUCK"
+                nb=$((bko * 2))
+                [ "$nb" -gt 3600 ] && nb=3600
+                echo "$nb" > "$BACKOFF"
+                log "探测失败：rsrp=${rsrp}（需 ${sgood}），回落 4G；下次探测在 ${nb} 秒后"
+              fi
             fi
           fi
         fi
@@ -262,7 +278,7 @@ smart5g_loop() {
       log "切5G: temp=${t}C cap=${cap}%(已过$((lbth+3))%) rsrp=${rsrp}(优于${sgood})"
       if sh "$MODDIR/bin/netmode.sh" 5g >> "$LOG" 2>&1; then
         echo "$now" > "$COOL"
-        rm -f "$REASON" "$STUCK"
+        rm -f "$REASON" "$STUCK" "$BACKOFF"
         failcnt=0
       else
         log "  ↑ 切换失败，60 秒后重试"
