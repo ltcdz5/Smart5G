@@ -13,11 +13,26 @@
 
   实测：`ksud post-fs-data` 触发后守护自动启动，日志正常输出。
 
-### 已知行为
+### 越狱模式的真实行为（依据官方源码）
 
-- 越狱模式下 **`ksud services` 不会执行模块的 `service.sh`**（实测：退出码 0，脚本未运行），
-  而 `ksud post-fs-data` 会执行 `post-fs-data.sh`。所以自动启动逻辑放在了 post-fs-data 里。
-- 越狱本身重启失效，需要重新越狱；模块文件在 `/data/adb/modules/` 不受影响。
+`userspace/ksud/src/late_load.rs` 里 `run()` 的顺序是：
+
+```
+Step 8   run_stage("late-load")
+Step 10  metamodule::exec_mount_script()      ← 模块挂载
+Step 11  run_stage("post-mount")
+Step 12  run_stage("service", NoWait)         ← 模块 service.sh 在这里执行
+Step 13  run_stage("boot-completed", NoWait)
+```
+
+**所以越狱模式下模块的 `service.sh` 会自动执行，不需要手动干预。**
+
+容易误判的一点：在**已经正常开机过**的系统上执行 `ksud services` 会看到 "services already started, skipping"，
+原因是 `report_services()` 用的是内核侧幂等标记（`KSU_IOCTL_REPORT_EVENT` 只有第一次返回 1）。
+late-load 走的是直接调用 `run_stage("service")`，不受该标记限制。
+
+另外 late-load **不会重放 `post-fs-data` 阶段**，所以本模块的 `post-fs-data.sh` 只是兜底：
+给那些只调用 `ksud post-fs-data` 的越狱工具用。
 
 ---
 ## v1.1 — 2026-10-24（versionCode 3）

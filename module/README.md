@@ -95,6 +95,29 @@
 
 ---
 
+---
+
+## KernelSU 越狱（late-load）模式
+
+不需要额外设置，装好模块后越狱完成即自动运行。
+
+依据官方源码 `userspace/ksud/src/late_load.rs`，越狱加载内核模块后依次执行：
+
+```
+late-load → post-mount → service → boot-completed
+```
+
+模块的 `service.sh` 在 **service 阶段**执行，所以守护会自动起来。
+
+注意两点：
+
+- 越狱本身重启失效，需要重新越狱；模块文件在 `/data/adb/modules/` 不会丢。
+- 在已经正常开机过、KSU 早已启动的系统上执行 `ksud services`，会提示
+  "services already started, skipping" —— 这是内核侧幂等标记，属正常现象，不是故障。
+
+如果你用的越狱工具只调用 `ksud post-fs-data` 而不走 late-load 流程，
+模块里的 `post-fs-data.sh` 会在系统已启动完成时兜底拉起守护。
+
 ## 卸载
 
 在 KernelSU 管理器里卸载，重启就好。
