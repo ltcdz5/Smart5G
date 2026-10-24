@@ -1,6 +1,6 @@
 {
   "version": "v1.2",
-  "versionCode": 5,
+  "versionCode": 6,
   "zipUrl": "https://github.com/ltcdz5/Smart5G/releases/download/v1.2/smart5g-v1.2.zip",
   "changelog": "v1.2：支持 KSU 越狱(late-load)模式自动启动（新增 post-fs-data 守卫，越狱后 ksud post-fs-data 即自动拉起守护）；含此前按数据卡判定、放开 NR 后自动重新注册等修复。"
 }
