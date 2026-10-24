@@ -41,8 +41,6 @@ jobs:
 
       - name: Sync update.json
         run: |
-          V='${{ steps.ver.outputs.version }}'
-          C='${{ steps.ver.outputs.vercode }}'
           python3 - <<'PY'
           import json, os
           v = os.environ['V']
@@ -76,6 +74,30 @@ jobs:
             echo 'update.json 无变化'
           fi
 
+      - name: Extract changelog for release
+        if: startsWith(github.ref, 'refs/tags/v')
+        run: |
+          python3 - <<'PY'
+          import re, os
+          v = os.environ['V']
+          body = ''
+          try:
+              txt = open('CHANGELOG.md', encoding='utf-8').read()
+              pat = re.compile(r'^##\s+' + re.escape(v) + r'\b.*?(?=^##\s+v|\Z)', re.S | re.M)
+              m = pat.search(txt)
+              if m:
+                  body = re.sub(r'^##\s+\S.*?\n', '', m.group(0).strip(), count=1).strip()
+          except FileNotFoundError:
+              pass
+          if not body:
+              body = f'版本 {v}'
+          body += '\n\n---\n\n**安装**：下载下方 zip，在 KernelSU 管理器中刷入，重启。旧版可在管理器内直接更新。\n'
+          open('release_notes.md','w',encoding='utf-8').write(body)
+          print(body[:600])
+          PY
+        env:
+          V: ${{ steps.ver.outputs.version }}
+
       - name: Build module zip
         run: |
           cd module
@@ -96,4 +118,5 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           files: smart5g-*.zip
-          generate_release_notes: true
+          body_path: release_notes.md
+          generate_release_notes: false
