@@ -1,6 +1,6 @@
 {
-  "version": "v1.1",
-  "versionCode": 4,
-  "zipUrl": "https://github.com/ltcdz5/Smart5G/releases/download/v1.1/smart5g-v1.1.zip",
+  "version": "v1.2",
+  "versionCode": 5,
+  "zipUrl": "https://github.com/ltcdz5/Smart5G/releases/download/v1.2/smart5g-v1.2.zip",
   "changelog": "按数据卡判定与切换（修双卡误判）、放开 NR 后自动重新注册（修卡在 4G）、探测边界与退避。"
 }
