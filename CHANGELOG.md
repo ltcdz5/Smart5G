@@ -1,8 +1,15 @@
 # 更新日志
 
-## v1.1 — 2026-10-24（versionCode 3，同日第二次修订）
+## v1.1 — 2026-10-24（versionCode 4）
 
-> 版本号沿用 v1.1，`versionCode` 从 2 升到 3。已装早前 v1.1 的机器靠 `versionCode` 比对即可收到本次更新。
+> 版本号沿用 v1.1，靠 `versionCode` 递增触发更新（1 → 2 → 3 → 4）。
+
+### 新增
+
+- **支持 KernelSU 越狱（late-load）模式**：越狱模式下内核模块是系统启动后才加载的，
+  `service` 阶段早已过去，守护不会自动起来。现在模块带一个 `post-fs-data.sh`：
+  仅当 `sys.boot_completed=1`（即系统已启动完成、属于 late-load 场景）时才拉起守护，
+  正常开机时该脚本直接退出，不干扰原有流程。实测 `ksud post-fs-data` 即可自动启动。
 
 修复 v1.0 的几个实际失效问题。核心是"用错判据"：判断当前是不是 5G，不该看
 `gsm.network.type`，而要看运营商网络类型掩码里 NR 是否被允许。
