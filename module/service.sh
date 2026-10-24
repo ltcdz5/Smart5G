@@ -71,6 +71,22 @@ read_rsrp_slot() {
     echo "${v:-0}"
 }
 
+# 默认配置。全新安装时 /data/adb/smart5g.conf 不存在，必须自动生成；
+# 老版本升级时也用它补齐新增的键，避免缺键导致判定走空值。
+DEFAULTS="netmode=auto interval=120 temp_high=40 temp_low=36 temp_critical=45 \
+ sig_thres=-100 sig_good=-90 lowbat=20 lowbat_enable=1 n78_aggr=1 \
+ skip_charging=0 cooldown=300 probe_interval=300 probe_window=20"
+
+ensure_conf() {
+    [ -f "$CONF" ] || : > "$CONF" 2>/dev/null
+    local kv k
+    for kv in $DEFAULTS; do
+        k=${kv%%=*}
+        grep -q "^$k=" "$CONF" 2>/dev/null || echo "$kv" >> "$CONF"
+    done
+    chmod 644 "$CONF" 2>/dev/null
+}
+
 load_conf() {
     CONF_netmode=""; CONF_temp_high=""; CONF_temp_low=""; CONF_sig_thres=""
     CONF_sig_good=""; CONF_n78_aggr=""; CONF_skip_charging=""; CONF_cooldown=""
@@ -100,7 +116,9 @@ load_conf() {
 i=0
 while [ "$(getprop sys.boot_completed)" != "1" ] && [ $i -lt 120 ]; do sleep 1; i=$((i+1)); done
 sleep 3
-[ -f "$CONF" ] || { log "no conf, exit"; exit 0; }
+ensure_conf
+[ -f "$CONF" ] || { log "无法创建配置 $CONF"; exit 1; }
+[ -s "$CONF" ] || { log "配置为空，已写入默认值"; }
 rotate "$LOG"
 
 loop() {

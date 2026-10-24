@@ -4,6 +4,20 @@ MODDIR=/data/adb/modules/smart5g
 CONF=/data/adb/smart5g.conf
 LOG=/data/adb/smart5g.log
 
+DEFAULTS="netmode=auto interval=120 temp_high=40 temp_low=36 temp_critical=45 \
+ sig_thres=-100 sig_good=-90 lowbat=20 lowbat_enable=1 n78_aggr=1 \
+ skip_charging=0 cooldown=300 probe_interval=300 probe_window=20"
+
+ensure_conf() {
+    [ -f "$CONF" ] || : > "$CONF" 2>/dev/null
+    local kv k
+    for kv in $DEFAULTS; do
+        k=${kv%%=*}
+        grep -q "^$k=" "$CONF" 2>/dev/null || echo "$kv" >> "$CONF"
+    done
+    chmod 644 "$CONF" 2>/dev/null
+}
+
 getconf() { sed -n "s/^$1=//p" "$CONF" 2>/dev/null | head -1; }
 
 json_escape() {
@@ -48,6 +62,8 @@ slot_sim_name() {
             if (sl == want && nm != "") { print nm; exit }
         }'
 }
+
+ensure_conf
 
 case "$1" in
   json)

@@ -13,6 +13,13 @@
 
   实测：`ksud post-fs-data` 触发后守护自动启动，日志正常输出。
 
+### 修复
+
+- **全新安装后模块不工作（严重）**：模块只带了 `smart5g.conf.template`，没有任何环节生成
+  `/data/adb/smart5g.conf`，而 `service.sh` 开头是「配置不存在就退出」。结果新装用户守护直接退出、
+  模块等于没装。现在 `service.sh` 与 `webctl.sh` 都会在启动时自动补齐默认配置；
+  老版本升级时也用它补上新增的键，避免缺键导致判定取空值。
+
 ### 越狱模式的真实行为（依据官方源码）
 
 `userspace/ksud/src/late_load.rs` 里 `run()` 的顺序是：
