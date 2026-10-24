@@ -198,6 +198,26 @@ input[type=number]:focus{outline:0;border-color:var(--p);background:var(--surf)}
       <div class="txt"><div class="t">低电量切换</div><div class="s">电量低时自动切 4G</div></div>
       <div class="sw" id="sw_lowbat"></div>
     </div>
+    <div class="row">
+      <div class="txt"><div class="t">充电时高温阈值</div><div class="s">充电中超过这个温度才按高温切 4G</div></div>
+      <input type="number" id="temp_critical" min="38" max="60">
+    </div>
+    <div class="row">
+      <div class="txt"><div class="t">探测间隔</div><div class="s">回落 4G 后多久探测一次 5G（秒）</div></div>
+      <input type="number" id="probe_interval" min="120" max="3600" step="60">
+    </div>
+    <div class="row">
+      <div class="txt"><div class="t">探测时长</div><div class="s">探测时临时放开 NR 多久（秒）</div></div>
+      <input type="number" id="probe_window" min="5" max="120">
+    </div>
+    <div class="row">
+      <div class="txt"><div class="t">n78 聚合加严</div><div class="s">n78 频段下弱信号阈值 +5 dB</div></div>
+      <div class="sw" id="sw_n78"></div>
+    </div>
+    <div class="row">
+      <div class="txt"><div class="t">充电时跳过切换</div><div class="s">充电中不做省电性质的回落</div></div>
+      <div class="sw" id="sw_skipchg"></div>
+    </div>
   </div>
   <div class="hint">提示：<b>信号好阈值</b>与<b>弱信号阈值</b>差距越大，越不容易反复切换，建议至少相差 8 dB。</div>
 </div>
@@ -292,6 +312,10 @@ function paint(){
   }
   var sw = document.getElementById("sw_lowbat");
   if(sw) sw.className = "sw" + (state.lowbat_enable === "1" ? " on" : "");
+  var sn = document.getElementById("sw_n78");
+  if(sn) sn.className = "sw" + (state.n78_aggr === "1" ? " on" : "");
+  var ss = document.getElementById("sw_skipchg");
+  if(ss) ss.className = "sw" + (state.skip_charging === "1" ? " on" : "");
 }
 
 function setText(id, v){ var e = document.getElementById(id); if(e) e.textContent = v; }
@@ -308,11 +332,15 @@ async function refresh(){
     return;
   }
   var net = d.network || "-";
-  var is5g = net.indexOf("NR") >= 0;
+  // 以掩码为准（gsm.network.type 关 NR 后会残留 NR_SA，实测会误判）
+  var is5g = (d.nr_allowed !== undefined && d.nr_allowed !== "")
+      ? (d.nr_allowed === "1")
+      : (net.indexOf("NR") >= 0);
   setText("net", is5g ? "5G" : "4G");
   var nv = document.getElementById("net");
   if(nv) nv.style.color = is5g ? "var(--ok)" : "var(--p)";
-  setText("netdesc", is5g ? "当前使用 5G 网络" : "已回落 4G（省电/弱信号/高温）");
+  var chgtip = (d.charging === "1") ? " ｜ 充电中" : "";
+  setText("netdesc", (is5g ? "当前使用 5G 网络" : "已回落 4G（省电/弱信号/高温）") + chgtip + " ｜ " + net);
   setText("temp", d.temp ? d.temp + "°C" : "-");
   setText("cap", d.cap ? d.cap + "%" : "-");
   setText("mode", d.netmode === "auto" ? "自动" : (d.netmode === "4g" ? "4G" : "5G"));
@@ -324,9 +352,14 @@ async function refresh(){
   setVal("lowbat", d.lowbat);
   setVal("interval", d.interval);
   setVal("cooldown", d.cooldown);
+  setVal("temp_critical", d.temp_critical);
+  setVal("probe_interval", d.probe_interval);
+  setVal("probe_window", d.probe_window);
 
   state.netmode = d.netmode || "auto";
   state.lowbat_enable = d.lowbat_enable || "1";
+  state.n78_aggr = d.n78_aggr || "1";
+  state.skip_charging = d.skip_charging || "0";
   paint();
 
   var logEl = document.getElementById("log");
@@ -351,6 +384,16 @@ async function refresh(){
     state.lowbat_enable = (state.lowbat_enable === "1") ? "0" : "1";
     paint();
   };
+  var sn = document.getElementById("sw_n78");
+  if(sn) sn.onclick = function(){
+    state.n78_aggr = (state.n78_aggr === "1") ? "0" : "1";
+    paint();
+  };
+  var ss = document.getElementById("sw_skipchg");
+  if(ss) ss.onclick = function(){
+    state.skip_charging = (state.skip_charging === "1") ? "0" : "1";
+    paint();
+  };
 })();
 
 async function saveCfg(){
@@ -358,8 +401,12 @@ async function saveCfg(){
   var txt = document.getElementById("saveTxt");
   btn.disabled = true; if(txt) txt.textContent = "保存中...";
 
-  var parts = ["netmode=" + state.netmode, "lowbat_enable=" + state.lowbat_enable];
-  var ks = ["temp_high","temp_low","sig_thres","sig_good","lowbat","interval","cooldown"];
+  var parts = ["netmode=" + state.netmode,
+               "lowbat_enable=" + state.lowbat_enable,
+               "n78_aggr=" + state.n78_aggr,
+               "skip_charging=" + state.skip_charging];
+  var ks = ["temp_high","temp_low","temp_critical","sig_thres","sig_good",
+            "lowbat","interval","cooldown","probe_interval","probe_window"];
   for(var i=0;i<ks.length;i++){
     var el = document.getElementById(ks[i]);
     if(el && el.value !== "") parts.push(ks[i] + "=" + el.value);
