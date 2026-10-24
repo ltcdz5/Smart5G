@@ -1,6 +1,26 @@
 # 更新日志
 
-## v1.1 — 2026-10-24（versionCode 4）
+## v1.2 — 2026-10-24
+
+支持 KernelSU 越狱（late-load）模式。
+
+### 新增
+
+- **越狱 / late-load 模式自动启动**：越狱模式下 `kernelsu.ko` 是系统启动完成后才加载的，
+  此时 `post-fs-data` 和 `service` 两个阶段都已过去，模块的守护不会自己起来。
+  现在模块新增 `post-fs-data.sh`：只在 `sys.boot_completed=1`（说明是 late-load 场景）时拉起守护，
+  正常开机时该脚本立即退出，不改变原有流程。
+
+  实测：`ksud post-fs-data` 触发后守护自动启动，日志正常输出。
+
+### 已知行为
+
+- 越狱模式下 **`ksud services` 不会执行模块的 `service.sh`**（实测：退出码 0，脚本未运行），
+  而 `ksud post-fs-data` 会执行 `post-fs-data.sh`。所以自动启动逻辑放在了 post-fs-data 里。
+- 越狱本身重启失效，需要重新越狱；模块文件在 `/data/adb/modules/` 不受影响。
+
+---
+## v1.1 — 2026-10-24（versionCode 3）
 
 > 版本号沿用 v1.1，靠 `versionCode` 递增触发更新（1 → 2 → 3 → 4）。
 
