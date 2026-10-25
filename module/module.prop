@@ -1,7 +1,7 @@
 id=smart5g
 name=Smart 5G Switch
 version=v1.2
-versionCode=12
+versionCode=13
 author=ltcdz5
 description=从作者自编内核附加模块中抽离的智能 4G/5G 自动切换：高温、低电、弱信号时自动回落 4G，条件恢复后自动回到 5G
 updateJson=https://raw.githubusercontent.com/ltcdz5/Smart5G/main/update.json
