@@ -92,7 +92,7 @@ read_rsrp_slot() {
 DEFAULTS="netmode=auto interval=120 temp_high=40 temp_low=36 temp_critical=45 \
  temp_low_chg=42 sig_thres=-100 sig_good=-88 lowbat=20 lowbat_enable=1 \
  n78_aggr=1 skip_charging=0 cooldown=300 probe_interval=300 probe_window=20 \
- refresh_airplane=0"
+ refresh_airplane=1"
 
 ensure_conf() {
     [ -f "$CONF" ] || : > "$CONF" 2>/dev/null

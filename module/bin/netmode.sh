@@ -107,11 +107,13 @@ case "$ACTION" in
         if on_nr "$DS"; then echo "already-nr"; exit 0; fi
         # 通话中绝不重注册：飞行模式会直接断话
         if in_call; then echo "busy-call"; exit 1; fi
-        # 一级：只关/开移动数据（轻，不断话、不动 WiFi）
-        svc data disable 2>/dev/null
+        # 一级：掩码抖动——先关 NR 3 秒再放开，逼 modem 重新评估 NR 接入。
+        # 实测 `svc data disable/enable` 在 GT5 Pro 上无法恢复 NR，掩码抖动可以。
+        # 它只动数据卡的 NR 许可，不碰 WiFi、不重置射频，通话中也不会断（且上面已拦通话）。
+        apply_mask "$DS" "$MASK_4G"
         sleep 3
-        svc data enable 2>/dev/null
-        if wait_nr "$DS" 6; then echo "refresh-ok-data"; exit 0; fi
+        apply_mask "$DS" "$MASK_5G"
+        if wait_nr "$DS" 6; then echo "refresh-ok-toggle"; exit 0; fi
         # 二级：飞行模式。默认关闭——它会短暂断开所有射频，通话中甚至可能掉话。
         # 需要时在配置里设 refresh_airplane=1 才启用。
         if [ "$(sed -n 's/^refresh_airplane=//p' /data/adb/smart5g.conf 2>/dev/null | head -1)" = "1" ]; then
