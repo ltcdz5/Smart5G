@@ -11,6 +11,7 @@ STUCK=/data/adb/.smart5g_4g_since
 BACKOFF=/data/adb/.smart5g_backoff
 COVERLOG=/data/adb/.smart5g_cover_log
 INCALL=/data/adb/.smart5g_incall
+ALLOWED_AT=/data/adb/.smart5g_allowed_at
 
 log() { echo "[$(date '+%m-%d %H:%M:%S')] $1" >> "$LOG"; }
 
@@ -267,36 +268,39 @@ loop() {
       fi
 
       if [ "$allowed" = "1" ]; then
-        # NR 已允许，但数据卡停在 LTE。
-        # 实测：用掩码把 NR 关掉再放开后，modem 有时不会自己重新注册 NR，
-        # 会一直卡在 LTE（掩码与 type 不一致）。按退避间隔做一次重新注册。
+        # NR 已允许但数据卡没注册上。先给 modem 时间，别急着折腾：
+        # 实测放开 NR 后重新扫 NR 要几十秒；以前等 18 秒就判失败并回关，
+        # 等于自己把重注册打断，于是永远回不到 5G。
         if [ "$temp_ok" = "1" ] && [ "$bat_ok" = "1" ]; then
-          if [ -n "$reason" ]; then rm -f "$REASON"; reason=""; fi
-          since=$(cat "$STUCK" 2>/dev/null || echo 0)
-          bko=$(cat "$BACKOFF" 2>/dev/null || echo "$pint")
-          [ -n "$bko" ] || bko="$pint"
-          if [ "$since" = "0" ] || [ -z "$since" ]; then
-            echo "$now" > "$STUCK"
-          elif [ $((now - since)) -ge "$bko" ]; then
-            echo "$now" > "$STUCK"
-            log "数据卡(slot${DS})在 4G 但 NR 已允许，尝试重新注册（间隔${bko}s）"
-            res=$(sh "$MODDIR/bin/netmode.sh" refresh 2>&1 | tail -1)
-            dtype=$(slot_type "$DS")
-            case "$dtype" in *NR*) on_nr=1 ;; *) on_nr=0 ;; esac
-            if [ "$res" = "busy-call" ]; then
-              log "重新注册被跳过：当前在通话中"
-            elif [ "$on_nr" = "1" ]; then
-              can=1; rm -f "$BACKOFF" "$STUCK"
-              log "重新注册成功（${res}），数据卡已回到 5G"
-            else
-              nb=$((bko * 2)); [ "$nb" -gt 3600 ] && nb=3600
-              echo "$nb" > "$BACKOFF"
-              log "重新注册未成功（${res}），下次尝试在 ${nb} 秒后"
+          [ -n "$reason" ] && { rm -f "$REASON"; reason=""; }
+          since_allowed=$(cat "$ALLOWED_AT" 2>/dev/null || echo 0)
+          if [ "$since_allowed" = "0" ] || [ -z "$since_allowed" ]; then
+            echo "$now" > "$ALLOWED_AT"
+            log "5G 已允许，等待 modem 重新注册（观察 90 秒）"
+          elif [ $((now - since_allowed)) -ge 90 ]; then
+            bko=$(cat "$BACKOFF" 2>/dev/null || echo "$pint")
+            [ -n "$bko" ] || bko="$pint"
+            since=$(cat "$STUCK" 2>/dev/null || echo 0)
+            if [ "$since" = "0" ] || [ -z "$since" ] || [ $((now - since)) -ge "$bko" ]; then
+              echo "$now" > "$STUCK"
+              log "观察期结束仍未注册 5G，尝试重新注册（间隔${bko}s）"
+              res=$(sh "$MODDIR/bin/netmode.sh" refresh 2>&1 | tail -1)
+              dtype=$(slot_type "$DS")
+              case "$dtype" in *NR*) on_nr=1 ;; *) on_nr=0 ;; esac
+              if [ "$on_nr" = "1" ]; then
+                can=1; rm -f "$BACKOFF" "$STUCK" "$ALLOWED_AT"
+                log "重新注册成功（${res}），已回到 5G"
+              else
+                nb=$((bko * 2)); [ "$nb" -gt 3600 ] && nb=3600
+                echo "$nb" > "$BACKOFF"
+                echo "$now" > "$ALLOWED_AT"
+                log "重新注册未成功（${res}），${nb} 秒后再试（期间保持允许 5G，不再回关）"
+              fi
             fi
           fi
         fi
       else
-        # 我们自己（或用户手动）把 NR 关了，条件恢复就放回去
+        # NR 是我们自己关掉的：条件恢复就放开，放开后交给上面的观察期，不再立刻回关
         if [ "$temp_ok" = "1" ] && [ "$bat_ok" = "1" ]; then
           if [ "$reason" = "weak" ]; then
             since=$(cat "$STUCK" 2>/dev/null || echo 0)
@@ -304,30 +308,17 @@ loop() {
             [ -n "$bko" ] || bko="$pint"
             if [ "$since" = "0" ] || [ -z "$since" ]; then
               echo "$now" > "$STUCK"
-              log "因弱信号回落，${bko} 秒后探测一次"
+              log "因弱信号回落，${bko} 秒后放开 5G 观察"
             elif [ $((now - since)) -ge "$bko" ]; then
               rm -f "$STUCK"
-              log "开始探测 5G（临时放开 NR ${pwin} 秒）"
-              sh "$MODDIR/bin/netmode.sh" 5g -s "$DS" >> "$LOG" 2>&1
-              sleep "$pwin"
-              rsrp=$(read_rsrp_slot "$DS")
-              dtype=$(slot_type "$DS")
-              case "$dtype" in *NR*) on_nr=1 ;; *) on_nr=0 ;; esac
-              if [ "$on_nr" = "1" ] && [ "$rsrp" -ne 0 ] && [ "$rsrp" -ge "$sgood" ]; then
-                can=1
-                rm -f "$BACKOFF"
-                log "探测成功：rsrp=${rsrp}dBm，保持 5G"
-              else
-                sh "$MODDIR/bin/netmode.sh" 4g -s "$DS" >> "$LOG" 2>&1
-                echo "$now" > "$STUCK"
-                nb=$((bko * 2)); [ "$nb" -gt 3600 ] && nb=3600
-                echo "$nb" > "$BACKOFF"
-                log "探测失败：rsrp=${rsrp} type=${dtype}，回落 4G；下次探测在 ${nb} 秒后"
-              fi
+              can=1
+              echo "$now" > "$ALLOWED_AT"
+              log "放开 5G，进入观察期（不再直接回关）"
             fi
           else
             can=1
             rm -f "$STUCK" "$BACKOFF"
+            echo "$now" > "$ALLOWED_AT"
             log "温度/电量已恢复（旧原因=${reason:-无}），切回 5G"
           fi
         fi
@@ -349,6 +340,7 @@ loop() {
       esac
       if sh "$MODDIR/bin/netmode.sh" 4g -s "$DS" >> "$LOG" 2>&1; then
         echo "$now" > "$COOL"; echo "${why:-unknown}" > "$REASON"; failcnt=0
+        rm -f "$ALLOWED_AT"
       else
         log "  ↑ 切换失败，60 秒后重试"
         echo $((now - cd + 60)) > "$COOL"
@@ -359,15 +351,6 @@ loop() {
       log "切5G: temp=${t}C cap=${cap}% rsrp=${rsrp} slot${DS}"
       if sh "$MODDIR/bin/netmode.sh" 5g -s "$DS" >> "$LOG" 2>&1; then
         echo "$now" > "$COOL"; rm -f "$REASON" "$STUCK" "$BACKOFF"; failcnt=0
-        # 放开 NR 不等于已注册，验证一次；没注册就推一把
-        dtype=$(slot_type "$DS")
-        case "$dtype" in
-          *NR*) ;;
-          *)
-            res=$(sh "$MODDIR/bin/netmode.sh" refresh 2>&1 | tail -1)
-            log "放开 NR 后数据卡未注册，重新注册：${res}"
-            ;;
-        esac
       else
         log "  ↑ 切换失败，60 秒后重试"
         echo $((now - cd + 60)) > "$COOL"
