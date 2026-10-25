@@ -12,6 +12,18 @@
 MASK_5G="111111111111111111111"
 MASK_4G="101111111111111111111"
 
+# 通话中禁止任何切换动作（尤其飞行模式会直接断话）
+in_call() {
+    case "$(timeout 3 dumpsys telephony.registry 2>/dev/null | grep -oE 'mCallState=[0-9]+' | grep -v 'mCallState=0' | head -1)" in
+        '') ;;
+        *) return 0 ;;
+    esac
+    case "$(timeout 3 dumpsys audio 2>/dev/null | grep -m1 'Actual mode')" in
+        *MODE_IN_CALL*|*MODE_IN_COMMUNICATION*) return 0 ;;
+    esac
+    return 1
+}
+
 data_slot() {
     local sub slot
     sub=$(settings get global multi_sim_data_call 2>/dev/null)
@@ -93,18 +105,24 @@ case "$ACTION" in
     refresh)
         DS="${SLOT:-$(data_slot)}"
         if on_nr "$DS"; then echo "already-nr"; exit 0; fi
-        # 一级：只关/开移动数据（轻，不影响 WiFi）
+        # 通话中绝不重注册：飞行模式会直接断话
+        if in_call; then echo "busy-call"; exit 1; fi
+        # 一级：只关/开移动数据（轻，不断话、不动 WiFi）
         svc data disable 2>/dev/null
         sleep 3
         svc data enable 2>/dev/null
         if wait_nr "$DS" 6; then echo "refresh-ok-data"; exit 0; fi
-        # 二级：飞行模式（重），完事后恢复 WiFi
-        W=$(settings get global wifi_on 2>/dev/null)
-        cmd connectivity airplane-mode enable 2>/dev/null
-        sleep 4
-        cmd connectivity airplane-mode disable 2>/dev/null
-        if [ "$W" = "1" ]; then sleep 3; svc wifi enable 2>/dev/null; fi
-        if wait_nr "$DS" 10; then echo "refresh-ok-airplane"; exit 0; fi
+        # 二级：飞行模式。默认关闭——它会短暂断开所有射频，通话中甚至可能掉话。
+        # 需要时在配置里设 refresh_airplane=1 才启用。
+        if [ "$(sed -n 's/^refresh_airplane=//p' /data/adb/smart5g.conf 2>/dev/null | head -1)" = "1" ]; then
+            if in_call; then echo "refresh-fail"; exit 5; fi
+            W=$(settings get global wifi_on 2>/dev/null)
+            cmd connectivity airplane-mode enable 2>/dev/null
+            sleep 4
+            cmd connectivity airplane-mode disable 2>/dev/null
+            if [ "$W" = "1" ]; then sleep 3; svc wifi enable 2>/dev/null; fi
+            if wait_nr "$DS" 10; then echo "refresh-ok-airplane"; exit 0; fi
+        fi
         echo "refresh-fail"
         exit 5
         ;;

@@ -10,6 +10,7 @@ REASON=/data/adb/.smart5g_reason
 STUCK=/data/adb/.smart5g_4g_since
 BACKOFF=/data/adb/.smart5g_backoff
 COVERLOG=/data/adb/.smart5g_cover_log
+INCALL=/data/adb/.smart5g_incall
 
 log() { echo "[$(date '+%m-%d %H:%M:%S')] $1" >> "$LOG"; }
 
@@ -26,6 +27,21 @@ is_charging() {
     local c
     c=$(cat /sys/class/power_supply/battery/current_now 2>/dev/null)
     [ -n "$c" ] && [ "$c" -gt 0 ] && return 0
+    return 1
+}
+
+# 是否在通话中。两路都查：
+#   mCallState 覆盖普通电话（每卡一个，0=空闲 1=来电 2=通话中）
+#   audio mode 覆盖 VoIP（微信/QQ 通话时是 MODE_IN_COMMUNICATION）
+# 通话中绝不能切换网络，更不能飞行模式——会直接断话。
+in_call() {
+    case "$(timeout 3 dumpsys telephony.registry 2>/dev/null | grep -oE 'mCallState=[0-9]+' | grep -v 'mCallState=0' | head -1)" in
+        '') ;;
+        *) return 0 ;;
+    esac
+    case "$(timeout 3 dumpsys audio 2>/dev/null | grep -m1 'Actual mode')" in
+        *MODE_IN_CALL*|*MODE_IN_COMMUNICATION*) return 0 ;;
+    esac
     return 1
 }
 
@@ -75,7 +91,8 @@ read_rsrp_slot() {
 # 老版本升级时也用它补齐新增的键，避免缺键导致判定走空值。
 DEFAULTS="netmode=auto interval=120 temp_high=40 temp_low=36 temp_critical=45 \
  temp_low_chg=42 sig_thres=-100 sig_good=-88 lowbat=20 lowbat_enable=1 \
- n78_aggr=1 skip_charging=0 cooldown=300 probe_interval=300 probe_window=20"
+ n78_aggr=1 skip_charging=0 cooldown=300 probe_interval=300 probe_window=20 \
+ refresh_airplane=0"
 
 ensure_conf() {
     [ -f "$CONF" ] || : > "$CONF" 2>/dev/null
@@ -187,6 +204,19 @@ loop() {
     if slot_nr_allowed "$DS"; then allowed=1; else allowed=0; fi
     case "$dtype" in *NR*) on_nr=1 ;; *) on_nr=0 ;; esac
 
+    # 通话中一律不切：切 NR 可能掉 VoLTE，飞行模式更是直接断话
+    if in_call; then
+      if [ ! -f "$INCALL" ]; then
+        echo "$(date +%s)" > "$INCALL"
+        log "检测到通话中，暂停自动切换（避免打断通话）"
+      fi
+      continue
+    fi
+    if [ -f "$INCALL" ]; then
+      rm -f "$INCALL"
+      log "通话结束，恢复自动切换"
+    fi
+    
     chg=0; is_charging && chg=1
 
     hot=0
@@ -253,7 +283,9 @@ loop() {
             res=$(sh "$MODDIR/bin/netmode.sh" refresh 2>&1 | tail -1)
             dtype=$(slot_type "$DS")
             case "$dtype" in *NR*) on_nr=1 ;; *) on_nr=0 ;; esac
-            if [ "$on_nr" = "1" ]; then
+            if [ "$res" = "busy-call" ]; then
+              log "重新注册被跳过：当前在通话中"
+            elif [ "$on_nr" = "1" ]; then
               can=1; rm -f "$BACKOFF" "$STUCK"
               log "重新注册成功（${res}），数据卡已回到 5G"
             else
