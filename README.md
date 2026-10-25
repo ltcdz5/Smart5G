@@ -47,6 +47,8 @@
 
 完整的配置说明、常见问题、工作原理见 [module/README.md](module/README.md)。
 
+卡在 4G 回不去？见 [怎么减少 4G 卡住](module/README.md#卡在-4g-回不去怎么办)。
+
 ---
 
 ## 许可
