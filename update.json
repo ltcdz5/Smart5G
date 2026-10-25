@@ -1,6 +1,6 @@
 {
   "version": "v1.2",
-  "versionCode": 9,
+  "versionCode": 10,
   "zipUrl": "https://github.com/ltcdz5/Smart5G/releases/download/v1.2/smart5g-v1.2.zip",
   "changelog": "v1.2：越狱(late-load)模式说明按官方源码修正——late-load 会自动执行 service 阶段，模块无需额外适配；含按数据卡判定、放开 NR 后自动重新注册等修复。"
 }
