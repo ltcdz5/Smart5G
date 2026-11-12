@@ -1,6 +1,6 @@
 {
-  "version": "v1.2",
-  "versionCode": 13,
-  "zipUrl": "https://github.com/ltcdz5/Smart5G/releases/download/v1.2/smart5g-v1.2.zip",
-  "changelog": "v1.2：越狱(late-load)模式说明按官方源码修正——late-load 会自动执行 service 阶段，模块无需额外适配；含按数据卡判定、放开 NR 后自动重新注册等修复。"
+  "version": "v1.3",
+  "versionCode": 14,
+  "zipUrl": "https://github.com/ltcdz5/Smart5G/releases/download/v1.3/smart5g-v1.3.zip",
+  "changelog": "v1.3：修复守护被跨重启残留锁挡死的缺陷——单实例锁从 /data/adb 挪到 /dev（tmpfs，重启即失），占用判定加 cmdline 身份核验防 pid 复用误判；脚本统一 LF 换行（修复 CRLF 导致开机守护根本没起来）；webctl 同步适配并自动清理旧锁残留。"
 }

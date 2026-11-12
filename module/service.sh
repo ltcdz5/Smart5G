@@ -362,10 +362,14 @@ loop() {
 }
 
 # 单实例保护
-LOCKDIR=/data/adb/.smart5g.lock
+# 锁必须放 tmpfs（/dev）：/data 上的锁重启不会消失，trap 只在正常退出时清理，
+# 强杀/重启后残留的旧 pid 会被 /proc/$OLD 存在性误判（pid 已被别的进程复用，
+# 实测撞上 vendor adpl 3918），导致守护连续多次开机被挡死。
+# 双保险：即便同一次开机内 pid 复用，也用 cmdline 核验身份，非本守护则抢锁。
+LOCKDIR=/dev/.smart5g.lock
 if ! mkdir "$LOCKDIR" 2>/dev/null; then
     OLD=$(cat "$LOCKDIR/pid" 2>/dev/null)
-    if [ -n "$OLD" ] && [ -d "/proc/$OLD" ]; then
+    if [ -n "$OLD" ] && [ -d "/proc/$OLD" ] && grep -q "smart5g/service.sh" "/proc/$OLD/cmdline" 2>/dev/null; then
         log "已有实例在运行 (pid $OLD)，本次启动退出"
         exit 0
     fi
@@ -374,6 +378,8 @@ if ! mkdir "$LOCKDIR" 2>/dev/null; then
 fi
 echo $$ > "$LOCKDIR/pid"
 trap 'rm -rf "$LOCKDIR"' EXIT INT TERM
+# 清掉 v1.2 及更早遗留在 /data 的旧锁（残留会让旧版本逻辑误判）
+rm -rf /data/adb/.smart5g.lock 2>/dev/null
 
 NM=$(sed -n 's/^netmode=//p' "$CONF" 2>/dev/null | head -1)
 case "$NM" in

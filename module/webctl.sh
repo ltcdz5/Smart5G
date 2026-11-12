@@ -128,9 +128,11 @@ case "$1" in
         echo "$k=$v" >> "$CONF"
       fi
     done
-    LOCK=/data/adb/.smart5g.lock
+    LOCK=/dev/.smart5g.lock
+    # v1.2 及更早版本的锁在 /data/adb 下且重启不消失，一并清掉遗留
+    rm -rf /data/adb/.smart5g.lock
     OLDPID=$(cat "$LOCK/pid" 2>/dev/null)
-    if [ -n "$OLDPID" ] && [ -d "/proc/$OLDPID" ]; then
+    if [ -n "$OLDPID" ] && [ -d "/proc/$OLDPID" ] && grep -q "smart5g/service.sh" "/proc/$OLDPID/cmdline" 2>/dev/null; then
       for c in $(pgrep -P "$OLDPID" 2>/dev/null); do kill -9 "$c" 2>/dev/null; done
       kill -9 "$OLDPID" 2>/dev/null
     fi

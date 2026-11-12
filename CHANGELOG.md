@@ -1,5 +1,11 @@
 # 更新日志
 
+## v1.3 (2026-11-12)
+
+- **修复：守护被跨重启残留锁挡死（实机复现）**。v1.2 及以前的单实例锁放在 `/data/adb/.smart5g.lock`，重启时 trap 来不及清理，残留旧 pid 在新一次开机里被别的进程（实测 vendor `adpl`，pid 稳定复用）占据，`/proc/$OLD` 存在性检查误判「已有实例」，守护连续两次开机都拒绝启动，智能切换静默失效。
+- 锁迁移到 `/dev/.smart5g.lock`（tmpfs，随开机自然消失）；占用判定增加 cmdline 身份核验（`grep smart5g/service.sh /proc/$OLD/cmdline`），pid 复用不再误伤。
+- `webctl.sh` 同步改用新锁路径、按身份杀旧进程，并自动清理 `/data/adb/.smart5g.lock` 遗留，升级后无需手动处理。
+- 三场景逻辑模拟：残留死锁→正常启动；pid 被无关进程复用→正常启动；真守护在跑→正确退出。
 ## v1.2 — 2026-10-24
 
 支持 KernelSU 越狱（late-load）模式。
